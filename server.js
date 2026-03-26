@@ -192,7 +192,7 @@ Return ONLY JSON.
       });
 
       response = await client.responses.create({
-        model: "gpt-5.3",
+        model: "gpt-4o",
         temperature: 0,
         input: [
           {
@@ -212,7 +212,7 @@ Return ONLY JSON.
       const dataUrl = `data:${req.file.mimetype};base64,${base64Image}`;
 
       response = await client.responses.create({
-        model: "gpt-5.3",
+        model: "gpt-4o",
         temperature: 0,
         input: [
           {
