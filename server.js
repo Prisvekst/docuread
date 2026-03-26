@@ -68,22 +68,58 @@ app.post("/parse-invoice", upload.single("file"), async (req, res) => {
 
     uploadedPath = req.file.path;
 
+    // ✅ IMPROVED SYSTEM PROMPT
     const systemPrompt = `
-You will read a Norwegian electricity invoice and return structured JSON.
+You are an expert data extraction system specialized in electricity invoices.
 
-Rules:
-- Return only the fields in the schema.
-- Use null if the value is missing or cannot be read clearly.
-- Do not guess.
-- Keep Norwegian names and text values as they appear in the document when appropriate.
-- Convert dates to DD.MM.YYYY when the date is clear.
-- Period must be a to from and to date, for example "01.01.26 - 01.02.26".
-- "additional_services" must be a list of strings, including the price of the service. If none exist, return [].
-- "total_costs" should be total electricity cost if it clearly appears on the invoice.
-- If a field is not found, add the field name to missing_fields.
-- Price area should only contain 3 characters, for example NO1, NO2, NO3, NO4.
+Your task is to extract structured data and return ONLY valid JSON.
+
+STRICT RULES:
+- Output must be valid JSON only.
+- Do NOT include explanations or extra text.
+- Do NOT hallucinate. If a value is missing, return null.
+- Preserve original currency and units exactly as written.
+- Keep all numeric values as numbers (no units inside numbers).
+- Trim whitespace and clean formatting.
+- Normalize dates to DD.MM.YYYY when possible.
+
+FIELD DEFINITIONS:
+- name: Customer full name
+- address: Customer billing address (NOT supplier or delivery address)
+- supplier: Company issuing the invoice
+- invoice_date: Invoice issue date (NOT due date / trekkdato)
+- annual_consumption: Expected yearly consumption (kWh)
+- meter_number: Electricity meter number
+- agreement_name: Name of electricity contract
+- price_area: Electricity region code (e.g. NO1, NO2)
+- surcharge: Additional cost per kWh (number only)
+- fixed_cost: Monthly fixed fee (kr)
+- period: Billing period (from - to)
+- period_consumption: Total kWh used in billing period
+- electricity_price: Price per kWh (number only, exclude surcharge)
+- additional_services: List of extra charges with price (strings)
+- total_costs: Total amount to pay
+
+DISAMBIGUATION RULES:
+- If multiple dates → use "Fakturadato"
+- If multiple addresses → use customer address
+- If multiple kWh values → use total consumption for billing period
+- If multiple totals → use "Totalt å betale"
+
+EXTRACTION HINTS:
+- invoice_date → Fakturadato
+- surcharge → Påslag
+- fixed_cost → fastbeløp
+- period_consumption → near "Din strømpris"
+- electricity_price → øre/kWh tied to usage (NOT påslag)
+- additional_services → Diverse
+
+If a field is missing, include it in "missing_fields".
+
+Return ONLY JSON.
 `.trim();
 
+    // ✅ UPDATED SCHEMA
     const schema = {
       type: "json_schema",
       name: "electricity_invoice_extraction",
@@ -95,7 +131,7 @@ Rules:
           name: { type: ["string", "null"] },
           address: { type: ["string", "null"] },
           supplier: { type: ["string", "null"] },
-          date: { type: ["string", "null"] },
+          invoice_date: { type: ["string", "null"] },
 
           annual_consumption: { type: ["number", "null"] },
 
@@ -106,7 +142,8 @@ Rules:
           surcharge: { type: ["number", "null"] },
           fixed_cost: { type: ["number", "null"] },
 
-          period: { type: ["number", "null"] },
+          period: { type: ["string", "null"] },
+          period_consumption: { type: ["number", "null"] },
           electricity_price: { type: ["number", "null"] },
 
           additional_services: {
@@ -125,7 +162,7 @@ Rules:
           "name",
           "address",
           "supplier",
-          "date",
+          "invoice_date",
           "annual_consumption",
           "meter_number",
           "agreement_name",
@@ -133,6 +170,7 @@ Rules:
           "surcharge",
           "fixed_cost",
           "period",
+          "period_consumption",
           "electricity_price",
           "additional_services",
           "total_costs",
@@ -154,30 +192,19 @@ Rules:
       });
 
       response = await client.responses.create({
-        model: "gpt-4o",
+        model: "gpt-5.3",
+        temperature: 0,
         input: [
           {
             role: "system",
-            content: [
-              {
-                type: "input_text",
-                text: systemPrompt,
-              },
-            ],
+            content: [{ type: "input_text", text: systemPrompt }],
           },
           {
             role: "user",
-            content: [
-              {
-                type: "input_file",
-                file_id: openaiFile.id,
-              },
-            ],
+            content: [{ type: "input_file", file_id: openaiFile.id }],
           },
         ],
-        text: {
-          format: schema,
-        },
+        text: { format: schema },
       });
     } else {
       const imageBuffer = fs.readFileSync(uploadedPath);
@@ -185,30 +212,19 @@ Rules:
       const dataUrl = `data:${req.file.mimetype};base64,${base64Image}`;
 
       response = await client.responses.create({
-        model: "gpt-4o",
+        model: "gpt-5.3",
+        temperature: 0,
         input: [
           {
             role: "system",
-            content: [
-              {
-                type: "input_text",
-                text: systemPrompt,
-              },
-            ],
+            content: [{ type: "input_text", text: systemPrompt }],
           },
           {
             role: "user",
-            content: [
-              {
-                type: "input_image",
-                image_url: dataUrl,
-              },
-            ],
+            content: [{ type: "input_image", image_url: dataUrl }],
           },
         ],
-        text: {
-          format: schema,
-        },
+        text: { format: schema },
       });
     }
 
