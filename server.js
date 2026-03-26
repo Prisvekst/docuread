@@ -76,11 +76,8 @@ Rules:
 - Use null if the value is missing or cannot be read clearly.
 - Do not guess.
 - Keep Norwegian names and text values as they appear in the document when appropriate.
-- Convert dates to YYYY-MM-DD when the date is clear.
-- Convert amounts to numbers without "kr".
-- Period should be a from and to date, for example "01.01.26 - 01.02.26".
-- Convert kWh to numbers without units.
-- If annual electricity consumption is stated as estimated, set annual_consumption_estimated to true.
+- Convert dates to DD.MM.YYYY when the date is clear.
+- Period must be a to from and to date, for example "01.01.26 - 01.02.26".
 - "additional_services" must be a list of strings, including the price of the service. If none exist, return [].
 - "total_costs" should be total electricity cost if it clearly appears on the invoice.
 - If a field is not found, add the field name to missing_fields.
@@ -101,7 +98,6 @@ Rules:
           date: { type: ["string", "null"] },
 
           annual_consumption: { type: ["number", "null"] },
-          annual_consumption_estimated: { type: ["boolean", "null"] },
 
           meter_number: { type: ["string", "null"] },
           agreement_name: { type: ["string", "null"] },
@@ -131,7 +127,6 @@ Rules:
           "supplier",
           "date",
           "annual_consumption",
-          "annual_consumption_estimated",
           "meter_number",
           "agreement_name",
           "price_area",
