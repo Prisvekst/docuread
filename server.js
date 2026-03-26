@@ -18,120 +18,38 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-const allowedMimeTypes = [
-  "application/pdf",
-  "image/png",
-  "image/jpeg",
-  "image/jpg",
-  "image/webp",
-];
-
-const upload = multer({
-  dest: uploadsDir,
-  limits: { fileSize: 20 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    if (!allowedMimeTypes.includes(file.mimetype)) {
-      return cb(new Error("Only PDF, PNG, JPG/JPEG, and WEBP are allowed."));
-    }
-    cb(null, true);
-  },
-});
+const upload = multer({ dest: uploadsDir });
 
 app.use(express.json());
-
-app.get("/", (req, res) => {
-  res.json({
-    ok: true,
-    message: "Electricity invoice parser API is running",
-  });
-});
 
 app.post("/parse-invoice", upload.single("file"), async (req, res) => {
   let uploadedPath = null;
 
   try {
-    if (!process.env.OPENAI_API_KEY) {
-      return res.status(500).json({
-        success: false,
-        error: "OPENAI_API_KEY is missing.",
-      });
-    }
-
-    if (!req.file) {
-      return res.status(400).json({
-        success: false,
-        error: 'No file uploaded. Use form-data key "file".',
-      });
-    }
-
     uploadedPath = req.file.path;
 
     const systemPrompt = `
-You are an expert data extraction system specialized in Norwegian electricity invoices.
+Extract structured data from a Norwegian electricity invoice.
 
-Return ONLY valid JSON. No explanations.
+Return ONLY JSON.
 
-GENERAL RULES:
-- Do NOT guess values
-- Missing values → null
+Rules:
 - Numbers must be numbers (no units)
-- Extract values exactly as shown in the document
-- Dates → DD.MM.YYYY format when possible
+- Do not guess
+- Missing → null
 
-FIELDS TO EXTRACT:
-name, address, supplier, invoice_date, annual_consumption,
-meter_number, agreement_name, price_area,
-surcharge, fixed_cost, period, period_consumption,
-electricity_price, additional_services, total_costs, missing_fields
+IMPORTANT:
+- Extract ALL additional services INCLUDING price and unit
+- Format: "<name> <value> <unit>"
 
-FIELD HINTS:
-- Fakturadato → invoice_date
-- Målepunkt / Målernummer → meter_number
-- Påslag → surcharge
-- Fastbeløp → fixed_cost
-- Forbruk → consumption
-- Totalt å betale → total_costs
-
-IMPORTANT RULES FOR additional_services:
-
-- additional_services must include ALL non-energy extra costs, services, or fees
-
-- A service is ANY line item that is NOT:
-  - electricity usage (kWh cost)
-  - total cost
-  - main grid/transport charges unless clearly an add-on
-
-- Each service MUST include:
-  1. Full service name (exactly as written)
-  2. Its corresponding price/value
-  3. Unit if present (kr, øre/kWh, %, kr/mnd, etc.)
-
-- ALWAYS combine name + price in ONE string
-
-- Format:
-  "<service name> <value> <unit>"
-
-- Examples:
-  "Papirfaktura 8,32 kr"
-
-
-- Prices may be located in a different column or row than the service name — match them correctly
-
-- NEVER return a service without a price if a price exists anywhere in the invoice
-
-- If no price exists → return only the name
-
-- Extract services even if they appear in:
-  - tables
-  - footnotes
-  - small text sections
-
-- additional_services must be an array of strings
-`.trim();
+Example:
+"Papirfaktura 8,32 kr"
+"Påslag 7.95 øre/kWh"
+`;
 
     const schema = {
       type: "json_schema",
-      name: "electricity_invoice_extraction",
+      name: "invoice",
       strict: true,
       schema: {
         type: "object",
@@ -181,91 +99,145 @@ IMPORTANT RULES FOR additional_services:
       },
     };
 
-    let response;
+    const fileBuffer = fs.readFileSync(uploadedPath);
 
-    if (req.file.mimetype === "application/pdf") {
-      const fileBuffer = fs.readFileSync(uploadedPath);
-
-      const openaiFile = await client.files.create({
-        file: await toFile(fileBuffer, req.file.originalname),
-        purpose: "user_data",
-      });
-
-      response = await client.responses.create({
-        model: "gpt-4o",
-        temperature: 0,
-        input: [
-          {
-            role: "system",
-            content: [{ type: "input_text", text: systemPrompt }],
-          },
-          {
-            role: "user",
-            content: [{ type: "input_file", file_id: openaiFile.id }],
-          },
-        ],
-        text: { format: schema },
-      });
-    } else {
-      const base64 = fs.readFileSync(uploadedPath).toString("base64");
-
-      response = await client.responses.create({
-        model: "gpt-4o",
-        temperature: 0,
-        input: [
-          {
-            role: "system",
-            content: [{ type: "input_text", text: systemPrompt }],
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_image",
-                image_url: `data:${req.file.mimetype};base64,${base64}`,
-              },
-            ],
-          },
-        ],
-        text: { format: schema },
-      });
-    }
-
-    let parsed;
-
-    try {
-      parsed = JSON.parse(response.output_text);
-    } catch (err) {
-      return res.status(500).json({
-        success: false,
-        error: "Failed to parse OpenAI response",
-        raw: response.output_text,
-      });
-    }
-
-    return res.json(parsed);
-  } catch (error) {
-    console.error("Server error:", error);
-
-    return res.status(500).json({
-      success: false,
-      error: error.message,
+    const openaiFile = await client.files.create({
+      file: await toFile(fileBuffer, req.file.originalname),
+      purpose: "user_data",
     });
+
+    const response = await client.responses.create({
+      model: "gpt-4o",
+      temperature: 0,
+      input: [
+        {
+          role: "system",
+          content: [{ type: "input_text", text: systemPrompt }],
+        },
+        {
+          role: "user",
+          content: [{ type: "input_file", file_id: openaiFile.id }],
+        },
+      ],
+      text: { format: schema },
+    });
+
+    const parsed = JSON.parse(response.output_text);
+
+    const formatted = formatOutput(parsed);
+
+    return res.json(formatted);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
   } finally {
     if (uploadedPath && fs.existsSync(uploadedPath)) {
-      try {
-        fs.unlinkSync(uploadedPath);
-      } catch {}
+      fs.unlinkSync(uploadedPath);
     }
   }
 });
 
-app.use((err, req, res, next) => {
-  return res.status(400).json({
-    success: false,
-    error: err.message,
-  });
-});
+// =========================
+// 🔥 SMART UNIT DETECTION
+// =========================
+
+function detectUnit(field, data) {
+  const services = data.additional_services?.join(" ").toLowerCase() || "";
+
+  if (services.includes("øre/kwh")) return "øre/kWh";
+  if (services.includes("kr/mnd")) return "kr/mnd";
+  if (services.includes("kr")) return "kr";
+
+  // fallback by field
+  if (field === "electricity_price" || field === "surcharge")
+    return "øre/kWh";
+
+  if (field === "fixed_cost" || field === "total_costs") return "kr";
+
+  if (field.includes("consumption")) return "kWh";
+
+  return "";
+}
+
+// =========================
+// 🎯 FORMATTER
+// =========================
+
+function formatOutput(data) {
+  return {
+    name: data.name,
+    address: formatText(data.address),
+    supplier: data.supplier,
+    invoice_date: data.invoice_date,
+
+    annual_consumption: formatValue(
+      data.annual_consumption,
+      detectUnit("annual_consumption", data)
+    ),
+
+    meter_number: data.meter_number,
+    agreement_name: data.agreement_name,
+    price_area: data.price_area,
+
+    surcharge: formatValue(
+      data.surcharge,
+      detectUnit("surcharge", data)
+    ),
+
+    fixed_cost: formatValue(
+      data.fixed_cost,
+      detectUnit("fixed_cost", data)
+    ),
+
+    period: normalizePeriod(data.period),
+
+    "period consumption": formatValue(
+      data.period_consumption,
+      detectUnit("period_consumption", data)
+    ),
+
+    electricity_price: formatValue(
+      data.electricity_price,
+      detectUnit("electricity_price", data)
+    ),
+
+    additional_services: data.additional_services?.join(", ") || null,
+
+    total_costs: formatValue(
+      data.total_costs,
+      detectUnit("total_costs", data),
+      true
+    ),
+  };
+}
+
+// =========================
+// HELPERS
+// =========================
+
+function formatValue(value, unit, isCurrency = false) {
+  if (value == null) return null;
+
+  if (isCurrency) {
+    return `${value.toLocaleString("en-US")} ${unit}`;
+  }
+
+  return unit ? `${value} ${unit}` : `${value}`;
+}
+
+function formatText(text) {
+  if (!text) return null;
+  return text
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function normalizePeriod(period) {
+  if (!period) return null;
+  return period.replace(
+    /(\d{2})\.(\d{2})\.(\d{2})/g,
+    (_, d, m, y) => `${d}.${m}.20${y}`
+  );
+}
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
