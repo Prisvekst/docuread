@@ -60,34 +60,73 @@ app.post("/parse-invoice", upload.single("file"), async (req, res) => {
     if (!req.file) {
       return res.status(400).json({
         success: false,
-        error: 'No file uploaded. Use key "file".',
+        error: 'No file uploaded. Use form-data key "file".',
       });
     }
 
     uploadedPath = req.file.path;
 
     const systemPrompt = `
-You are an expert data extraction system specialized in electricity invoices.
+You are an expert data extraction system specialized in Norwegian electricity invoices.
 
-Return ONLY valid JSON.
+Return ONLY valid JSON. No explanations.
 
-RULES:
-- Do NOT include explanations
-- Do NOT hallucinate
+GENERAL RULES:
+- Do NOT guess values
 - Missing values → null
 - Numbers must be numbers (no units)
+- Extract values exactly as shown in the document
+- Dates → DD.MM.YYYY format when possible
 
-FIELDS:
+FIELDS TO EXTRACT:
 name, address, supplier, invoice_date, annual_consumption,
 meter_number, agreement_name, price_area,
 surcharge, fixed_cost, period, period_consumption,
 electricity_price, additional_services, total_costs, missing_fields
 
-HINTS:
+FIELD HINTS:
 - Fakturadato → invoice_date
+- Målepunkt / Målernummer → meter_number
 - Påslag → surcharge
-- fastbeløp → fixed_cost
+- Fastbeløp → fixed_cost
+- Forbruk → consumption
 - Totalt å betale → total_costs
+
+IMPORTANT RULES FOR additional_services:
+
+- additional_services must include ALL non-energy extra costs, services, or fees
+
+- A service is ANY line item that is NOT:
+  - electricity usage (kWh cost)
+  - total cost
+  - main grid/transport charges unless clearly an add-on
+
+- Each service MUST include:
+  1. Full service name (exactly as written)
+  2. Its corresponding price/value
+  3. Unit if present (kr, øre/kWh, %, kr/mnd, etc.)
+
+- ALWAYS combine name + price in ONE string
+
+- Format:
+  "<service name> <value> <unit>"
+
+- Examples:
+  "Papirfaktura 8,32 kr"
+
+
+- Prices may be located in a different column or row than the service name — match them correctly
+
+- NEVER return a service without a price if a price exists anywhere in the invoice
+
+- If no price exists → return only the name
+
+- Extract services even if they appear in:
+  - tables
+  - footnotes
+  - small text sections
+
+- additional_services must be an array of strings
 `.trim();
 
     const schema = {
@@ -192,110 +231,41 @@ HINTS:
       });
     }
 
-    const parsed = JSON.parse(response.output_text);
+    let parsed;
 
-    // ✅ FORMATTER (THIS FIXES YOUR OUTPUT)
-    const formatted = formatInvoice(parsed);
+    try {
+      parsed = JSON.parse(response.output_text);
+    } catch (err) {
+      return res.status(500).json({
+        success: false,
+        error: "Failed to parse OpenAI response",
+        raw: response.output_text,
+      });
+    }
 
-    return res.json(formatted);
-  } catch (err) {
+    return res.json(parsed);
+  } catch (error) {
+    console.error("Server error:", error);
+
     return res.status(500).json({
       success: false,
-      error: err.message,
+      error: error.message,
     });
   } finally {
     if (uploadedPath && fs.existsSync(uploadedPath)) {
-      fs.unlinkSync(uploadedPath);
+      try {
+        fs.unlinkSync(uploadedPath);
+      } catch {}
     }
   }
 });
 
-// =====================
-// ✅ FORMAT FUNCTIONS
-// =====================
-
-function formatInvoice(data) {
-  return {
-    name: data.name,
-    address: formatAddress(data.address),
-    supplier: data.supplier,
-    invoice_date: data.invoice_date,
-
-    annual_consumption:
-      data.annual_consumption != null
-        ? `${data.annual_consumption} kWh`
-        : null,
-
-    meter_number: data.meter_number,
-    agreement_name: data.agreement_name,
-
-    price_area: formatPriceArea(data.price_area),
-
-    surcharge:
-      data.surcharge != null
-        ? `${data.surcharge} øre/kWh`
-        : null,
-
-    fixed_cost:
-      data.fixed_cost != null
-        ? `${data.fixed_cost.toFixed(2)} kr/mnd`
-        : null,
-
-    period: formatPeriod(data.period),
-
-    "period consumption":
-      data.period_consumption != null
-        ? `${data.period_consumption} kWh`
-        : null,
-
-    electricity_price:
-      data.electricity_price != null
-        ? `${data.electricity_price} øre/kWh`
-        : null,
-
-    additional_services:
-      data.additional_services?.length
-        ? data.additional_services
-            .map((s) => {
-              const match = s.match(/(.+)\s([\d.,]+)/);
-              if (!match) return s;
-              return `${match[1]} (${match[2].replace(",", ".")} kr)`;
-            })
-            .join(", ")
-        : null,
-
-    total_costs:
-      data.total_costs != null
-        ? `${data.total_costs.toLocaleString("en-US")} kr`
-        : null,
-  };
-}
-
-function formatAddress(address) {
-  if (!address) return null;
-  return address
-    .toLowerCase()
-    .replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-function formatPriceArea(area) {
-  const map = {
-    NO1: "Øst-Norge (NO1)",
-    NO2: "Sør-Norge (NO2)",
-    NO3: "Midt-Norge (NO3)",
-    NO4: "Nord-Norge (NO4)",
-    NO5: "Vest-Norge (NO5)",
-  };
-  return map[area] || area;
-}
-
-function formatPeriod(period) {
-  if (!period) return null;
-  return period.replace(
-    /(\d{2})\.(\d{2})\.(\d{2})/g,
-    (_, d, m, y) => `${d}.${m}.20${y}`
-  );
-}
+app.use((err, req, res, next) => {
+  return res.status(400).json({
+    success: false,
+    error: err.message,
+  });
+});
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
