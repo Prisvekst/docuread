@@ -29,7 +29,7 @@ const allowedMimeTypes = [
 const upload = multer({
   dest: uploadsDir,
   limits: {
-    fileSize: 20 * 1024 * 1024, // 20 MB
+    fileSize: 20 * 1024 * 1024,
   },
   fileFilter: (req, file, cb) => {
     if (!allowedMimeTypes.includes(file.mimetype)) {
@@ -55,7 +55,7 @@ app.post("/parse-invoice", upload.single("file"), async (req, res) => {
     if (!process.env.OPENAI_API_KEY) {
       return res.status(500).json({
         success: false,
-        error: "OPENAI_API_KEY mangler i .env",
+        error: "OPENAI_API_KEY mangler i miljøvariablene.",
       });
     }
 
@@ -68,26 +68,7 @@ app.post("/parse-invoice", upload.single("file"), async (req, res) => {
 
     uploadedPath = req.file.path;
 
-    // Les temp-filen og send den videre til OpenAI
-    // med originalt filnavn + MIME-type
-    const fileBuffer = fs.readFileSync(uploadedPath);
-
-    const openaiFile = await client.files.create({
-      file: await toFile(fileBuffer, req.file.originalname, {
-        type: req.file.mimetype,
-      }),
-      purpose: "user_data",
-    });
-
-    const response = await client.responses.create({
-      model: "gpt-4o",
-      input: [
-        {
-          role: "system",
-          content: [
-            {
-              type: "input_text",
-              text: `
+    const systemPrompt = `
 Du skal lese en norsk strømfaktura og returnere strukturert JSON.
 
 Regler:
@@ -103,81 +84,137 @@ Regler:
 - "tilleggstjenester" skal være en tekstliste. Hvis ingen finnes, returner [].
 - "sum_strom_kr" skal være total strømkostnad hvis den fremgår tydelig av fakturaen.
 - Hvis et felt ikke finnes, legg feltnavnet i missing_fields.
-              `.trim(),
-            },
-          ],
-        },
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_file",
-              file_id: openaiFile.id,
-            },
-          ],
-        },
-      ],
-      text: {
-        format: {
-          type: "json_schema",
-          name: "stromfaktura_extraction",
-          strict: true,
-          schema: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              navn: { type: ["string", "null"] },
-              adresse: { type: ["string", "null"] },
-              leverandor: { type: ["string", "null"] },
-              dato: { type: ["string", "null"] },
+`.trim();
 
-              stromforbruk_ar_kwh: { type: ["number", "null"] },
-              stromforbruk_ar_estimert: { type: ["boolean", "null"] },
+    const schema = {
+      type: "json_schema",
+      name: "stromfaktura_extraction",
+      strict: true,
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          navn: { type: ["string", "null"] },
+          adresse: { type: ["string", "null"] },
+          leverandor: { type: ["string", "null"] },
+          dato: { type: ["string", "null"] },
 
-              malernummer: { type: ["string", "null"] },
-              avtale_navn: { type: ["string", "null"] },
-              prisomrade: { type: ["string", "null"] },
+          stromforbruk_ar_kwh: { type: ["number", "null"] },
+          stromforbruk_ar_estimert: { type: ["boolean", "null"] },
 
-              paslag_ore_per_kwh: { type: ["number", "null"] },
-              fastbelop_per_maned_kr: { type: ["number", "null"] },
+          malernummer: { type: ["string", "null"] },
+          avtale_navn: { type: ["string", "null"] },
+          prisomrade: { type: ["string", "null"] },
 
-              stromforbruk_periode_kwh: { type: ["number", "null"] },
-              strompris_ore_per_kwh: { type: ["number", "null"] },
+          paslag_ore_per_kwh: { type: ["number", "null"] },
+          fastbelop_per_maned_kr: { type: ["number", "null"] },
 
-              tilleggstjenester: {
-                type: "array",
-                items: { type: "string" },
-              },
+          stromforbruk_periode_kwh: { type: ["number", "null"] },
+          strompris_ore_per_kwh: { type: ["number", "null"] },
 
-              sum_strom_kr: { type: ["number", "null"] },
+          tilleggstjenester: {
+            type: "array",
+            items: { type: "string" },
+          },
 
-              missing_fields: {
-                type: "array",
-                items: { type: "string" },
-              },
-            },
-            required: [
-              "navn",
-              "adresse",
-              "leverandor",
-              "dato",
-              "stromforbruk_ar_kwh",
-              "stromforbruk_ar_estimert",
-              "malernummer",
-              "avtale_navn",
-              "prisomrade",
-              "paslag_ore_per_kwh",
-              "fastbelop_per_maned_kr",
-              "stromforbruk_periode_kwh",
-              "strompris_ore_per_kwh",
-              "tilleggstjenester",
-              "sum_strom_kr",
-              "missing_fields",
-            ],
+          sum_strom_kr: { type: ["number", "null"] },
+
+          missing_fields: {
+            type: "array",
+            items: { type: "string" },
           },
         },
+        required: [
+          "navn",
+          "adresse",
+          "leverandor",
+          "dato",
+          "stromforbruk_ar_kwh",
+          "stromforbruk_ar_estimert",
+          "malernummer",
+          "avtale_navn",
+          "prisomrade",
+          "paslag_ore_per_kwh",
+          "fastbelop_per_maned_kr",
+          "stromforbruk_periode_kwh",
+          "strompris_ore_per_kwh",
+          "tilleggstjenester",
+          "sum_strom_kr",
+          "missing_fields",
+        ],
       },
-    });
+    };
+
+    let response;
+
+    if (req.file.mimetype === "application/pdf") {
+      const fileBuffer = fs.readFileSync(uploadedPath);
+
+      const openaiFile = await client.files.create({
+        file: await toFile(fileBuffer, req.file.originalname, {
+          type: req.file.mimetype,
+        }),
+        purpose: "user_data",
+      });
+
+      response = await client.responses.create({
+        model: "gpt-4o",
+        input: [
+          {
+            role: "system",
+            content: [
+              {
+                type: "input_text",
+                text: systemPrompt,
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_file",
+                file_id: openaiFile.id,
+              },
+            ],
+          },
+        ],
+        text: {
+          format: schema,
+        },
+      });
+    } else {
+      const imageBuffer = fs.readFileSync(uploadedPath);
+      const base64Image = imageBuffer.toString("base64");
+      const dataUrl = `data:${req.file.mimetype};base64,${base64Image}`;
+
+      response = await client.responses.create({
+        model: "gpt-4o",
+        input: [
+          {
+            role: "system",
+            content: [
+              {
+                type: "input_text",
+                text: systemPrompt,
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_image",
+                image_url: dataUrl,
+              },
+            ],
+          },
+        ],
+        text: {
+          format: schema,
+        },
+      });
+    }
 
     let parsed;
 
@@ -191,7 +228,7 @@ Regler:
       });
     }
 
-    return res.json({
+    return res.status(200).json({
       success: true,
       filename: req.file.originalname,
       mime_type: req.file.mimetype,
