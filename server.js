@@ -13,20 +13,20 @@ const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-const uploadsDir = "uploads";
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
-
-const upload = multer({ dest: uploadsDir });
+const upload = multer({ dest: "uploads/" });
 
 app.use(express.json());
 
 app.post("/parse-invoice", upload.single("file"), async (req, res) => {
-  let uploadedPath = null;
+  let path = req.file.path;
 
   try {
-    uploadedPath = req.file.path;
+    const fileBuffer = fs.readFileSync(path);
+
+    const file = await client.files.create({
+      file: await toFile(fileBuffer, req.file.originalname),
+      purpose: "user_data",
+    });
 
     const systemPrompt = `
 Extract structured data from a Norwegian electricity invoice.
@@ -35,16 +35,12 @@ Return ONLY JSON.
 
 Rules:
 - Numbers must be numbers (no units)
+- Missing values → null
 - Do not guess
-- Missing → null
 
 IMPORTANT:
-- Extract ALL additional services INCLUDING price and unit
+- additional_services must include name + price + unit if present
 - Format: "<name> <value> <unit>"
-
-Example:
-"Papirfaktura 8,32 kr"
-"Påslag 7.95 øre/kWh"
 `;
 
     const schema = {
@@ -99,13 +95,6 @@ Example:
       },
     };
 
-    const fileBuffer = fs.readFileSync(uploadedPath);
-
-    const openaiFile = await client.files.create({
-      file: await toFile(fileBuffer, req.file.originalname),
-      purpose: "user_data",
-    });
-
     const response = await client.responses.create({
       model: "gpt-4o",
       temperature: 0,
@@ -116,7 +105,7 @@ Example:
         },
         {
           role: "user",
-          content: [{ type: "input_file", file_id: openaiFile.id }],
+          content: [{ type: "input_file", file_id: file.id }],
         },
       ],
       text: { format: schema },
@@ -124,120 +113,129 @@ Example:
 
     const parsed = JSON.parse(response.output_text);
 
-    const formatted = formatOutput(parsed);
+    const cleaned = cleanData(parsed);
 
-    return res.json(formatted);
+    return res.json(cleaned);
   } catch (err) {
     return res.status(500).json({ error: err.message });
   } finally {
-    if (uploadedPath && fs.existsSync(uploadedPath)) {
-      fs.unlinkSync(uploadedPath);
-    }
+    if (fs.existsSync(path)) fs.unlinkSync(path);
   }
 });
 
-// =========================
-// 🔥 SMART UNIT DETECTION
-// =========================
-
-function detectUnit(field, data) {
-  const services = data.additional_services?.join(" ").toLowerCase() || "";
-
-  if (services.includes("øre/kwh")) return "øre/kWh";
-  if (services.includes("kr/mnd")) return "kr/mnd";
-  if (services.includes("kr")) return "kr";
-
-  // fallback by field
-  if (field === "electricity_price" || field === "surcharge")
-    return "øre/kWh";
-
-  if (field === "fixed_cost" || field === "total_costs") return "kr";
-
-  if (field.includes("consumption")) return "kWh";
-
-  return "";
-}
 
 // =========================
-// 🎯 FORMATTER
+// 🔥 CLEANING + FORMATTING
 // =========================
 
-function formatOutput(data) {
+function cleanData(data) {
   return {
     name: data.name,
-    address: formatText(data.address),
+    address: formatAddress(data.address),
     supplier: data.supplier,
     invoice_date: data.invoice_date,
 
-    annual_consumption: formatValue(
-      data.annual_consumption,
-      detectUnit("annual_consumption", data)
-    ),
+    annual_consumption: formatUnit(data.annual_consumption, "kWh"),
 
     meter_number: data.meter_number,
     agreement_name: data.agreement_name,
     price_area: data.price_area,
 
-    surcharge: formatValue(
-      data.surcharge,
-      detectUnit("surcharge", data)
-    ),
+    surcharge: formatUnit(data.surcharge, "øre/kWh"),
+    fixed_cost: formatUnit(data.fixed_cost, "kr/mnd"),
 
-    fixed_cost: formatValue(
-      data.fixed_cost,
-      detectUnit("fixed_cost", data)
-    ),
+    period: formatPeriod(data.period),
 
-    period: normalizePeriod(data.period),
+    "period consumption": formatUnit(data.period_consumption, "kWh"),
 
-    "period consumption": formatValue(
-      data.period_consumption,
-      detectUnit("period_consumption", data)
-    ),
+    electricity_price: formatUnit(data.electricity_price, "øre/kWh"),
 
-    electricity_price: formatValue(
-      data.electricity_price,
-      detectUnit("electricity_price", data)
-    ),
+    additional_services: cleanServices(data.additional_services),
 
-    additional_services: data.additional_services?.join(", ") || null,
-
-    total_costs: formatValue(
-      data.total_costs,
-      detectUnit("total_costs", data),
-      true
-    ),
+    total_costs: formatCurrency(data.total_costs),
   };
 }
 
+
 // =========================
-// HELPERS
+// 🧠 SMART CLEANERS
 // =========================
 
-function formatValue(value, unit, isCurrency = false) {
-  if (value == null) return null;
+function cleanServices(services) {
+  if (!services?.length) return null;
 
-  if (isCurrency) {
-    return `${value.toLocaleString("en-US")} ${unit}`;
-  }
+  return services
+    .filter((s) => {
+      const lower = s.toLowerCase();
 
-  return unit ? `${value} ${unit}` : `${value}`;
+      // ❌ Remove duplicates of known fields
+      if (lower.includes("påslag")) return false;
+      if (lower.includes("fastbeløp")) return false;
+
+      return true;
+    })
+    .map((s) => normalizeService(s))
+    .join(", ");
 }
 
-function formatText(text) {
-  if (!text) return null;
+function normalizeService(s) {
+  if (!s) return null;
+
+  const match = s.match(/(.+?)\s([\d.,]+)\s*(kr|øre\/kwh|kr\/mnd)?/i);
+
+  if (!match) return capitalize(s);
+
+  let [, name, value, unit] = match;
+
+  value = value.replace(",", ".");
+  unit = unit ? unit.replace("kwh", "kWh") : "kr";
+
+  return `${capitalize(name)} (${value} ${unit})`;
+}
+
+
+// =========================
+// 🧰 HELPERS
+// =========================
+
+function formatUnit(value, unit) {
+  if (value == null) return null;
+  return `${value} ${unit}`;
+}
+
+function formatCurrency(value) {
+  if (value == null) return null;
+  return `${value.toLocaleString("en-US")} kr`;
+}
+
+function formatAddress(addr) {
+  if (!addr) return null;
+
+  return addr
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .replace("Strømmen", "Strømmen"); // force correct casing
+}
+
+function formatPeriod(period) {
+  if (!period) return null;
+
+  return period
+    .replace(
+      /(\d{2})\.(\d{2})\.(\d{2})/g,
+      (_, d, m, y) => `${d}.${m}.20${y}`
+    )
+    .replace("-", " - ");
+}
+
+function capitalize(text) {
   return text
     .toLowerCase()
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function normalizePeriod(period) {
-  if (!period) return null;
-  return period.replace(
-    /(\d{2})\.(\d{2})\.(\d{2})/g,
-    (_, d, m, y) => `${d}.${m}.20${y}`
-  );
-}
+
+// =========================
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
