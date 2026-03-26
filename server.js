@@ -33,7 +33,7 @@ const upload = multer({
   },
   fileFilter: (req, file, cb) => {
     if (!allowedMimeTypes.includes(file.mimetype)) {
-      return cb(new Error("Kun PDF, PNG, JPG/JPEG og WEBP er tillatt."));
+      return cb(new Error("Only PDF, PNG, JPG/JPEG, and WEBP are allowed."));
     }
     cb(null, true);
   },
@@ -44,7 +44,7 @@ app.use(express.json());
 app.get("/", (req, res) => {
   res.json({
     ok: true,
-    message: "Strømfaktura parser API kjører",
+    message: "Electricity invoice parser API is running",
   });
 });
 
@@ -55,69 +55,69 @@ app.post("/parse-invoice", upload.single("file"), async (req, res) => {
     if (!process.env.OPENAI_API_KEY) {
       return res.status(500).json({
         success: false,
-        error: "OPENAI_API_KEY mangler i miljøvariablene.",
+        error: "OPENAI_API_KEY is missing from the environment variables.",
       });
     }
 
     if (!req.file) {
       return res.status(400).json({
         success: false,
-        error: 'Ingen fil lastet opp. Bruk form-data med nøkkel "file".',
+        error: 'No file uploaded. Use form-data with key "file".',
       });
     }
 
     uploadedPath = req.file.path;
 
     const systemPrompt = `
-Du skal lese en norsk strømfaktura og returnere strukturert JSON.
+You will read a Norwegian electricity invoice and return structured JSON.
 
-Regler:
-- Returner kun feltene i schemaet.
-- Bruk null hvis verdien mangler eller ikke kan leses tydelig.
-- Ikke gjett.
-- Behold norske navn og tekstverdier slik de står i dokumentet når det passer.
-- Konverter dato til YYYY-MM-DD hvis datoen er tydelig.
-- Konverter beløp til tall uten "kr".
-- Konverter øre/kWh til tall, for eksempel "6,25 øre/kWh" -> 6.25
-- Konverter kWh til tall uten enhet.
-- Hvis strømforbruk år er oppgitt som estimert, sett stromforbruk_ar_estimert til true.
-- "tilleggstjenester" skal være en tekstliste. Hvis ingen finnes, returner [].
-- "sum_strom_kr" skal være total strømkostnad hvis den fremgår tydelig av fakturaen.
-- Hvis et felt ikke finnes, legg feltnavnet i missing_fields.
+Rules:
+- Return only the fields in the schema.
+- Use null if the value is missing or cannot be read clearly.
+- Do not guess.
+- Keep Norwegian names and text values as they appear in the document when appropriate.
+- Convert dates to YYYY-MM-DD when the date is clear.
+- Convert amounts to numbers without "kr".
+- Convert øre/kWh to numbers, for example "6,25 øre/kWh" -> 6.25
+- Convert kWh to numbers without units.
+- If annual electricity consumption is stated as estimated, set annual_consumption_estimated to true.
+- "additional_services" must be a list of strings. If none exist, return [].
+- "total_costs" should be total electricity cost if it clearly appears on the invoice.
+- If a field is not found, add the field name to missing_fields.
 `.trim();
 
     const schema = {
       type: "json_schema",
-      name: "stromfaktura_extraction",
+      name: "electricity_invoice_extraction",
       strict: true,
       schema: {
         type: "object",
         additionalProperties: false,
         properties: {
-          navn: { type: ["string", "null"] },
-          adresse: { type: ["string", "null"] },
-          leverandor: { type: ["string", "null"] },
-          dato: { type: ["string", "null"] },
+          name: { type: ["string", "null"] },
+          address: { type: ["string", "null"] },
+          supplier: { type: ["string", "null"] },
+          date: { type: ["string", "null"] },
 
-          stromforbruk_ar_kwh: { type: ["number", "null"] },
-          stromforbruk_ar_estimert: { type: ["boolean", "null"] },
+          annual_consumption: { type: ["number", "null"] },
+          annual_consumption_estimated: { type: ["boolean", "null"] },
 
-          malernummer: { type: ["string", "null"] },
-          avtale_navn: { type: ["string", "null"] },
-          prisomrade: { type: ["string", "null"] },
+          meter_number: { type: ["string", "null"] },
+          agreement_name: { type: ["string", "null"] },
+          price_area: { type: ["string", "null"] },
 
-          paslag_ore_per_kwh: { type: ["number", "null"] },
-          fastbelop_per_maned_kr: { type: ["number", "null"] },
+          surcharge: { type: ["number", "null"] },
+          fixed_cost: { type: ["number", "null"] },
 
-          stromforbruk_periode_kwh: { type: ["number", "null"] },
-          strompris_ore_per_kwh: { type: ["number", "null"] },
+          period: { type: ["number", "null"] },
+          electricity_price: { type: ["number", "null"] },
 
-          tilleggstjenester: {
+          additional_services: {
             type: "array",
             items: { type: "string" },
           },
 
-          sum_strom_kr: { type: ["number", "null"] },
+          total_costs: { type: ["number", "null"] },
 
           missing_fields: {
             type: "array",
@@ -125,21 +125,21 @@ Regler:
           },
         },
         required: [
-          "navn",
-          "adresse",
-          "leverandor",
-          "dato",
-          "stromforbruk_ar_kwh",
-          "stromforbruk_ar_estimert",
-          "malernummer",
-          "avtale_navn",
-          "prisomrade",
-          "paslag_ore_per_kwh",
-          "fastbelop_per_maned_kr",
-          "stromforbruk_periode_kwh",
-          "strompris_ore_per_kwh",
-          "tilleggstjenester",
-          "sum_strom_kr",
+          "name",
+          "address",
+          "supplier",
+          "date",
+          "annual_consumption",
+          "annual_consumption_estimated",
+          "meter_number",
+          "agreement_name",
+          "price_area",
+          "surcharge",
+          "fixed_cost",
+          "period",
+          "electricity_price",
+          "additional_services",
+          "total_costs",
           "missing_fields",
         ],
       },
@@ -223,30 +223,25 @@ Regler:
     } catch (parseError) {
       return res.status(500).json({
         success: false,
-        error: "Kunne ikke parse JSON fra OpenAI-responsen.",
+        error: "Could not parse JSON from the OpenAI response.",
         raw_output: response.output_text || null,
       });
     }
 
-    return res.status(200).json({
-      success: true,
-      filename: req.file.originalname,
-      mime_type: req.file.mimetype,
-      data: parsed,
-    });
+    return res.status(200).json(parsed);
   } catch (error) {
     console.error("Server error:", error);
 
     return res.status(500).json({
       success: false,
-      error: error?.message || "Ukjent serverfeil",
+      error: error?.message || "Unknown server error",
     });
   } finally {
     if (uploadedPath && fs.existsSync(uploadedPath)) {
       try {
         fs.unlinkSync(uploadedPath);
       } catch (cleanupError) {
-        console.error("Kunne ikke slette temp-fil:", cleanupError.message);
+        console.error("Could not delete temp file:", cleanupError.message);
       }
     }
   }
@@ -255,7 +250,7 @@ Regler:
 app.use((err, req, res, next) => {
   return res.status(400).json({
     success: false,
-    error: err.message || "Feil ved filopplasting",
+    error: err.message || "Error uploading file",
   });
 });
 
