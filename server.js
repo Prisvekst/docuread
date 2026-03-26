@@ -78,12 +78,13 @@ Rules:
 - Keep Norwegian names and text values as they appear in the document when appropriate.
 - Convert dates to YYYY-MM-DD when the date is clear.
 - Convert amounts to numbers without "kr".
-- Convert øre/kWh to numbers, for example "6,25 øre/kWh" -> 6.25
+- Period should be a from and to date, for example "01.01.26 - 01.02.26".
 - Convert kWh to numbers without units.
 - If annual electricity consumption is stated as estimated, set annual_consumption_estimated to true.
-- "additional_services" must be a list of strings. If none exist, return [].
+- "additional_services" must be a list of strings, including the price of the service. If none exist, return [].
 - "total_costs" should be total electricity cost if it clearly appears on the invoice.
 - If a field is not found, add the field name to missing_fields.
+- Price area should only contain 3 characters, for example NO1, NO2, NO3, NO4.
 `.trim();
 
     const schema = {
