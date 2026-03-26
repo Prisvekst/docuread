@@ -28,9 +28,7 @@ const allowedMimeTypes = [
 
 const upload = multer({
   dest: uploadsDir,
-  limits: {
-    fileSize: 20 * 1024 * 1024,
-  },
+  limits: { fileSize: 20 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (!allowedMimeTypes.includes(file.mimetype)) {
       return cb(new Error("Only PDF, PNG, JPG/JPEG, and WEBP are allowed."));
@@ -55,71 +53,43 @@ app.post("/parse-invoice", upload.single("file"), async (req, res) => {
     if (!process.env.OPENAI_API_KEY) {
       return res.status(500).json({
         success: false,
-        error: "OPENAI_API_KEY is missing from the environment variables.",
+        error: "OPENAI_API_KEY is missing.",
       });
     }
 
     if (!req.file) {
       return res.status(400).json({
         success: false,
-        error: 'No file uploaded. Use form-data with key "file".',
+        error: 'No file uploaded. Use key "file".',
       });
     }
 
     uploadedPath = req.file.path;
 
-    // ✅ IMPROVED SYSTEM PROMPT
     const systemPrompt = `
 You are an expert data extraction system specialized in electricity invoices.
 
-Your task is to extract structured data and return ONLY valid JSON.
+Return ONLY valid JSON.
 
-STRICT RULES:
-- Output must be valid JSON only.
-- Do NOT include explanations or extra text.
-- Do NOT hallucinate. If a value is missing, return null.
-- Preserve original currency and units exactly as written.
-- Keep all numeric values as numbers (no units inside numbers).
-- Trim whitespace and clean formatting.
-- Normalize dates to DD.MM.YYYY when possible.
+RULES:
+- Do NOT include explanations
+- Do NOT hallucinate
+- Missing values → null
+- Numbers must be numbers (no units)
 
-FIELD DEFINITIONS:
-- name: Customer full name
-- address: Customer billing address (NOT supplier or delivery address)
-- supplier: Company issuing the invoice
-- invoice_date: Invoice issue date (NOT due date / trekkdato)
-- annual_consumption: Expected yearly consumption (kWh)
-- meter_number: Electricity meter number
-- agreement_name: Name of electricity contract
-- price_area: Electricity region code (e.g. NO1, NO2)
-- surcharge: Additional cost per kWh (number only)
-- fixed_cost: Monthly fixed fee (kr)
-- period: Billing period (from - to)
-- period_consumption: Total kWh used in billing period
-- electricity_price: Price per kWh (number only, exclude surcharge)
-- additional_services: List of extra charges with price (strings)
-- total_costs: Total amount to pay
+FIELDS:
+name, address, supplier, invoice_date, annual_consumption,
+meter_number, agreement_name, price_area,
+surcharge, fixed_cost, period, period_consumption,
+electricity_price, additional_services, total_costs, missing_fields
 
-DISAMBIGUATION RULES:
-- If multiple dates → use "Fakturadato"
-- If multiple addresses → use customer address
-- If multiple kWh values → use total consumption for billing period
-- If multiple totals → use "Totalt å betale"
-
-EXTRACTION HINTS:
-- invoice_date → Fakturadato
-- surcharge → Påslag
-- fixed_cost → fastbeløp
-- period_consumption → near "Din strømpris"
-- electricity_price → øre/kWh tied to usage (NOT påslag)
-- additional_services → Diverse
-
-If a field is missing, include it in "missing_fields".
-
-Return ONLY JSON.
+HINTS:
+- Fakturadato → invoice_date
+- Påslag → surcharge
+- fastbeløp → fixed_cost
+- Totalt å betale → total_costs
 `.trim();
 
-    // ✅ UPDATED SCHEMA
     const schema = {
       type: "json_schema",
       name: "electricity_invoice_extraction",
@@ -132,27 +102,20 @@ Return ONLY JSON.
           address: { type: ["string", "null"] },
           supplier: { type: ["string", "null"] },
           invoice_date: { type: ["string", "null"] },
-
           annual_consumption: { type: ["number", "null"] },
-
           meter_number: { type: ["string", "null"] },
           agreement_name: { type: ["string", "null"] },
           price_area: { type: ["string", "null"] },
-
           surcharge: { type: ["number", "null"] },
           fixed_cost: { type: ["number", "null"] },
-
           period: { type: ["string", "null"] },
           period_consumption: { type: ["number", "null"] },
           electricity_price: { type: ["number", "null"] },
-
           additional_services: {
             type: "array",
             items: { type: "string" },
           },
-
           total_costs: { type: ["number", "null"] },
-
           missing_fields: {
             type: "array",
             items: { type: "string" },
@@ -185,9 +148,7 @@ Return ONLY JSON.
       const fileBuffer = fs.readFileSync(uploadedPath);
 
       const openaiFile = await client.files.create({
-        file: await toFile(fileBuffer, req.file.originalname, {
-          type: req.file.mimetype,
-        }),
+        file: await toFile(fileBuffer, req.file.originalname),
         purpose: "user_data",
       });
 
@@ -207,9 +168,7 @@ Return ONLY JSON.
         text: { format: schema },
       });
     } else {
-      const imageBuffer = fs.readFileSync(uploadedPath);
-      const base64Image = imageBuffer.toString("base64");
-      const dataUrl = `data:${req.file.mimetype};base64,${base64Image}`;
+      const base64 = fs.readFileSync(uploadedPath).toString("base64");
 
       response = await client.responses.create({
         model: "gpt-4o",
@@ -221,51 +180,123 @@ Return ONLY JSON.
           },
           {
             role: "user",
-            content: [{ type: "input_image", image_url: dataUrl }],
+            content: [
+              {
+                type: "input_image",
+                image_url: `data:${req.file.mimetype};base64,${base64}`,
+              },
+            ],
           },
         ],
         text: { format: schema },
       });
     }
 
-    let parsed;
+    const parsed = JSON.parse(response.output_text);
 
-    try {
-      parsed = JSON.parse(response.output_text);
-    } catch (parseError) {
-      return res.status(500).json({
-        success: false,
-        error: "Could not parse JSON from the OpenAI response.",
-        raw_output: response.output_text || null,
-      });
-    }
+    // ✅ FORMATTER (THIS FIXES YOUR OUTPUT)
+    const formatted = formatInvoice(parsed);
 
-    return res.status(200).json(parsed);
-  } catch (error) {
-    console.error("Server error:", error);
-
+    return res.json(formatted);
+  } catch (err) {
     return res.status(500).json({
       success: false,
-      error: error?.message || "Unknown server error",
+      error: err.message,
     });
   } finally {
     if (uploadedPath && fs.existsSync(uploadedPath)) {
-      try {
-        fs.unlinkSync(uploadedPath);
-      } catch (cleanupError) {
-        console.error("Could not delete temp file:", cleanupError.message);
-      }
+      fs.unlinkSync(uploadedPath);
     }
   }
 });
 
-app.use((err, req, res, next) => {
-  return res.status(400).json({
-    success: false,
-    error: err.message || "Error uploading file",
-  });
-});
+// =====================
+// ✅ FORMAT FUNCTIONS
+// =====================
+
+function formatInvoice(data) {
+  return {
+    name: data.name,
+    address: formatAddress(data.address),
+    supplier: data.supplier,
+    invoice_date: data.invoice_date,
+
+    annual_consumption:
+      data.annual_consumption != null
+        ? `${data.annual_consumption} kWh`
+        : null,
+
+    meter_number: data.meter_number,
+    agreement_name: data.agreement_name,
+
+    price_area: formatPriceArea(data.price_area),
+
+    surcharge:
+      data.surcharge != null
+        ? `${data.surcharge} øre/kWh`
+        : null,
+
+    fixed_cost:
+      data.fixed_cost != null
+        ? `${data.fixed_cost.toFixed(2)} kr/mnd`
+        : null,
+
+    period: formatPeriod(data.period),
+
+    "period consumption":
+      data.period_consumption != null
+        ? `${data.period_consumption} kWh`
+        : null,
+
+    electricity_price:
+      data.electricity_price != null
+        ? `${data.electricity_price} øre/kWh`
+        : null,
+
+    additional_services:
+      data.additional_services?.length
+        ? data.additional_services
+            .map((s) => {
+              const match = s.match(/(.+)\s([\d.,]+)/);
+              if (!match) return s;
+              return `${match[1]} (${match[2].replace(",", ".")} kr)`;
+            })
+            .join(", ")
+        : null,
+
+    total_costs:
+      data.total_costs != null
+        ? `${data.total_costs.toLocaleString("en-US")} kr`
+        : null,
+  };
+}
+
+function formatAddress(address) {
+  if (!address) return null;
+  return address
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function formatPriceArea(area) {
+  const map = {
+    NO1: "Øst-Norge (NO1)",
+    NO2: "Sør-Norge (NO2)",
+    NO3: "Midt-Norge (NO3)",
+    NO4: "Nord-Norge (NO4)",
+    NO5: "Vest-Norge (NO5)",
+  };
+  return map[area] || area;
+}
+
+function formatPeriod(period) {
+  if (!period) return null;
+  return period.replace(
+    /(\d{2})\.(\d{2})\.(\d{2})/g,
+    (_, d, m, y) => `${d}.${m}.20${y}`
+  );
+}
 
 app.listen(port, () => {
-  console.log(`Server listening on port ${port}`);
+  console.log(`Server running on port ${port}`);
 });
