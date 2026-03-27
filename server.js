@@ -227,7 +227,8 @@ function formatUnit(value, unit) {
 
   let corrected = value;
 
-  if (unit === "øre/kWh" && value > 0 && value < 10) {
+  // 🔥 Only scale if it's VERY likely kroner (tiny value)
+  if (unit === "øre/kWh" && value > 0 && value < 1) {
     corrected = value * 100;
   }
 
