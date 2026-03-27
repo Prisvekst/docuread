@@ -104,7 +104,7 @@ fixed_cost:
 
 total_costs:
 - Electricity cost ONLY (strøm)
-- Prefer "Sum strøm"
+- Prefer "Sum" or "Total" or typically one of the biggest cost related numbers
 - Ignore "Totalt å betale" and "Nettleie"
 
 meter_id:
