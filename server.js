@@ -39,14 +39,16 @@ Rules:
 - Do not guess
 
 IMPORTANT:
-- total_costs must ONLY include electricity cost (strøm), NOT total invoice
-- Prefer values labeled:
-  "Sum strøm"
-- Ignore:
-  "Totalt å betale"
-  "Nettleie"
 
-- additional_services must include name + value + unit if present
+- electricity_price and surcharge MUST be price per kWh (øre/kWh)
+- NEVER use total kr values for these fields
+- Always prefer values labeled "øre/kWh"
+
+- total_costs must ONLY include electricity cost (strøm)
+- Prefer "Sum strøm"
+- Ignore "Totalt å betale" and "Nettleie"
+
+- additional_services must include name + value + unit
 - Format: "<name> <value> <unit>"
 `;
 
@@ -148,14 +150,14 @@ function cleanData(data) {
     agreement_name: data.agreement_name,
     price_area: data.price_area,
 
-    surcharge: formatUnit(data.surcharge, "øre/kWh"),
+    surcharge: formatOrePerKwh(data.surcharge),
     fixed_cost: formatUnit(data.fixed_cost, "kr/mnd"),
 
     period: formatPeriod(data.period),
 
     "period consumption": formatUnit(data.period_consumption, "kWh"),
 
-    electricity_price: formatUnit(data.electricity_price, "øre/kWh"),
+    electricity_price: formatOrePerKwh(data.electricity_price),
 
     additional_services: cleanServices(data.additional_services, data),
 
@@ -177,7 +179,6 @@ function cleanServices(services, data) {
 
       const lower = s.toLowerCase();
 
-      // Remove same meaning (not value-based)
       if (
         data.fixed_cost !== null &&
         (lower.includes("fastbeløp") ||
@@ -221,18 +222,28 @@ function normalizeService(s) {
 }
 
 
-// 🔥 UNIT FIX (Tibber scaling fix included)
-function formatUnit(value, unit) {
+// 🔥 SPECIALIZED FOR øre/kWh (fixes both bugs)
+function formatOrePerKwh(value) {
   if (value == null) return null;
 
   let corrected = value;
 
-  // 🔥 Only scale if it's VERY likely kroner (tiny value)
-  if (unit === "øre/kWh" && value > 0 && value < 1) {
+  // Case 1: clearly kroner misinterpreted
+  if (value > 0 && value < 1) {
     corrected = value * 100;
   }
 
-  return `${round(corrected)} ${unit}`;
+  // Case 2: clearly wrong (total kr mistakenly mapped)
+  if (value > 20) {
+    return null; // discard invalid surcharge/price
+  }
+
+  return `${round(corrected)} øre/kWh`;
+}
+
+function formatUnit(value, unit) {
+  if (value == null) return null;
+  return `${round(value)} ${unit}`;
 }
 
 function round(num) {
