@@ -39,6 +39,13 @@ Rules:
 - Do not guess
 
 IMPORTANT:
+- total_costs must ONLY include electricity cost (strøm), NOT total invoice
+- Prefer values labeled:
+  "Sum strøm"
+- Ignore:
+  "Totalt å betale"
+  "Nettleie"
+
 - additional_services must include name + value + unit if present
 - Format: "<name> <value> <unit>"
 `;
@@ -170,8 +177,7 @@ function cleanServices(services, data) {
 
       const lower = s.toLowerCase();
 
-      // Remove only same meaning (not value-based)
-
+      // Remove same meaning (not value-based)
       if (
         data.fixed_cost !== null &&
         (lower.includes("fastbeløp") ||
@@ -215,13 +221,12 @@ function normalizeService(s) {
 }
 
 
-// 🔥 FIXED UNIT FORMAT (with scaling correction)
+// 🔥 UNIT FIX (Tibber scaling fix included)
 function formatUnit(value, unit) {
   if (value == null) return null;
 
   let corrected = value;
 
-  // Fix: kr interpreted as øre
   if (unit === "øre/kWh" && value > 0 && value < 10) {
     corrected = value * 100;
   }
