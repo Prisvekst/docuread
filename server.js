@@ -105,12 +105,12 @@ fixed_cost:
 total_costs:
 - Electricity cost ONLY (strøm)
 - Prefer "Sum" or "Total" or typically one of the biggest cost related numbers
-- Ignore "Totalt å betale" and "Nettleie"
+- Ignore anything to to with nettleie, or total cost including nettleie
 
 meter_id:
 - Metering point ID (målepunkt-ID)
 - Numeric string
-- Typically starts with 7070575000
+- Always starts with 7070575000, if it does not start with this its probably meter_number instead.
 - Usually 18 digits
 - Extract full number exactly
 - Do NOT confuse with meter_number
