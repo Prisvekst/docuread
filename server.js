@@ -231,7 +231,17 @@ function formatAddress(addr) {
 
   return addr
     .toLowerCase()
-    .replace(/\b\w/g, (c) => c.toUpperCase());
+    .split(" ")
+    .map((word) => {
+      // Preserve numbers with letters like "115a"
+      if (/^\d+[a-z]$/.test(word)) {
+        return word.toUpperCase(); // 115A (common standard)
+      }
+
+      // Normal words → capitalize first letter only
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    })
+    .join(" ");
 }
 
 function formatPeriod(period) {
