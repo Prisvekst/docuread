@@ -32,28 +32,101 @@ app.post("/parse-invoice", upload.single("file"), async (req, res) => {
     const systemPrompt = `
 You are an expert at reading Norwegian electricity invoices.
 
-Return structured JSON.
+Return ONLY valid JSON.
 
-CRITICAL:
-Choose the correct meaning, not just numbers.
+Your task is to extract structured data and normalize it consistently.
 
-Field rules:
+------------------------
+GENERAL RULES
+------------------------
 
-- electricity_price → price per kWh (øre/kWh)
-- surcharge → additional cost per kWh (øre/kWh)
-- fixed_cost → monthly fee (kr/mnd)
-- total_costs → electricity cost ONLY (strøm), NOT total invoice
+- Do NOT guess values
+- If a value is missing → return null
+- Always choose the most correct and relevant value when multiple candidates exist
 
-Important distinctions:
-- "øre/kWh" = rate → use for price fields
-- "kr" = total → NEVER use for price fields
+------------------------
+FORMATTING RULES (IMPORTANT)
+------------------------
 
-- If multiple candidates exist → choose the correct one
-- If unsure → return null
+Dates:
+- Always use format: DD.MM.YYYY
+- Example: "2. mai 2025" → "02.05.2025"
 
-- additional_services must include name + price
+Periods:
+- Always return full date range in format:
+  "DD.MM.YYYY - DD.MM.YYYY"
+- Convert text periods:
+  "hele april 2025" → "01.04.2025 - 30.04.2025"
 
-Be precise. Do not guess.
+Numbers:
+- Use dot as decimal separator (not comma)
+- Example: "8,32" → "8.32"
+
+------------------------
+FIELD DEFINITIONS
+------------------------
+
+electricity_price:
+- Price per kWh
+- MUST be in øre/kWh
+- Only use values labeled "øre/kWh"
+- NEVER use values in kr
+
+surcharge:
+- Additional cost per kWh
+- MUST be in øre/kWh
+- Only use values labeled "øre/kWh"
+- NEVER use total kr values
+
+fixed_cost:
+- Monthly fixed fee
+- MUST be in kr/mnd
+
+total_costs:
+- MUST represent electricity cost ONLY (strøm)
+- Prefer values labeled:
+  "Sum strøm"
+- NEVER use:
+  "Totalt å betale"
+  "Nettleie"
+
+------------------------
+ADDITIONAL SERVICES
+------------------------
+
+- Include ONLY extra services NOT already represented in other fields
+
+- DO NOT include:
+  - fixed_cost (e.g. abonnement, fastbeløp)
+  - surcharge (påslag)
+
+- Each service must include:
+  - name
+  - value
+  - unit
+
+- Format:
+  "Service Name (value unit)"
+
+- Example:
+  "Papirfaktura (8.32 kr)"
+
+- If no valid additional services exist → return null
+
+------------------------
+CONSISTENCY RULES
+------------------------
+
+- Use consistent formatting across all fields
+- Do not mix formats (no commas, no colons, no inconsistent spacing)
+- Ensure clean, readable output
+
+------------------------
+FINAL OUTPUT
+------------------------
+
+Return ONLY the JSON object following the schema.
+No explanations.
 `;
 
     const schema = {
