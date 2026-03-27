@@ -28,28 +28,32 @@ app.post("/parse-invoice", upload.single("file"), async (req, res) => {
       purpose: "user_data",
     });
 
+    // 🧠 AI-FIRST PROMPT
     const systemPrompt = `
-Extract structured data from a Norwegian electricity invoice.
+You are an expert at reading Norwegian electricity invoices.
 
-Return ONLY JSON.
+Return structured JSON.
 
-Rules:
-- Numbers must be numbers (no units)
-- Missing values → null
-- Do not guess
+CRITICAL:
+Choose the correct meaning, not just numbers.
 
-IMPORTANT:
+Field rules:
 
-- electricity_price and surcharge MUST be price per kWh (øre/kWh)
-- NEVER use total kr values for these fields
-- Always prefer values labeled "øre/kWh"
+- electricity_price → price per kWh (øre/kWh)
+- surcharge → additional cost per kWh (øre/kWh)
+- fixed_cost → monthly fee (kr/mnd)
+- total_costs → electricity cost ONLY (strøm), NOT total invoice
 
-- total_costs must ONLY include electricity cost (strøm)
-- Prefer "Sum strøm"
-- Ignore "Totalt å betale" and "Nettleie"
+Important distinctions:
+- "øre/kWh" = rate → use for price fields
+- "kr" = total → NEVER use for price fields
 
-- additional_services must include name + value + unit
-- Format: "<name> <value> <unit>"
+- If multiple candidates exist → choose the correct one
+- If unsure → return null
+
+- additional_services must include name + price
+
+Be precise. Do not guess.
 `;
 
     const schema = {
@@ -122,9 +126,9 @@ IMPORTANT:
 
     const parsed = JSON.parse(response.output_text);
 
-    const cleaned = cleanData(parsed);
+    const formatted = formatOutput(parsed);
 
-    return res.json(cleaned);
+    return res.json(formatted);
   } catch (err) {
     return res.status(500).json({ error: err.message });
   } finally {
@@ -134,32 +138,32 @@ IMPORTANT:
 
 
 // =========================
-// 🔥 CLEAN + FORMAT
+// 🎯 LIGHT FORMATTING ONLY
 // =========================
 
-function cleanData(data) {
+function formatOutput(data) {
   return {
     name: data.name,
     address: formatAddress(data.address),
     supplier: data.supplier,
-    invoice_date: data.invoice_date,
+    invoice_date: normalizeDate(data.invoice_date),
 
-    annual_consumption: formatUnit(data.annual_consumption, "kWh"),
+    annual_consumption: formatValue(data.annual_consumption, "kWh"),
 
     meter_number: data.meter_number,
     agreement_name: data.agreement_name,
     price_area: data.price_area,
 
-    surcharge: formatOrePerKwh(data.surcharge),
-    fixed_cost: formatUnit(data.fixed_cost, "kr/mnd"),
+    surcharge: formatValue(data.surcharge, "øre/kWh"),
+    fixed_cost: formatValue(data.fixed_cost, "kr/mnd"),
 
     period: formatPeriod(data.period),
 
-    "period consumption": formatUnit(data.period_consumption, "kWh"),
+    "period consumption": formatValue(data.period_consumption, "kWh"),
 
-    electricity_price: formatOrePerKwh(data.electricity_price),
+    electricity_price: formatValue(data.electricity_price, "øre/kWh"),
 
-    additional_services: cleanServices(data.additional_services, data),
+    additional_services: formatServices(data.additional_services),
 
     total_costs: formatCurrency(data.total_costs),
   };
@@ -167,92 +171,31 @@ function cleanData(data) {
 
 
 // =========================
-// ✅ PREVENT DOUBLE COUNTING
+// 🧠 HELPERS (SAFE ONLY)
 // =========================
 
-function cleanServices(services, data) {
-  if (!services?.length) return null;
-
-  return services
-    .map((s) => {
-      if (!s) return null;
-
-      const lower = s.toLowerCase();
-
-      if (
-        data.fixed_cost !== null &&
-        (lower.includes("fastbeløp") ||
-          lower.includes("abonnement") ||
-          lower.includes("mnd"))
-      ) {
-        return null;
-      }
-
-      if (
-        data.surcharge !== null &&
-        lower.includes("påslag")
-      ) {
-        return null;
-      }
-
-      return normalizeService(s);
-    })
-    .filter(Boolean)
-    .join(", ");
-}
-
-
-// =========================
-// 🧠 HELPERS
-// =========================
-
-function normalizeService(s) {
-  if (!s) return null;
-
-  const match = s.match(/(.+?)\s([\d.,]+)\s*(kr|øre\/kwh|kr\/mnd)?/i);
-
-  if (!match) return capitalize(s);
-
-  let [, name, value, unit] = match;
-
-  value = value.replace(",", ".");
-  unit = unit ? unit.replace("kwh", "kWh") : "kr";
-
-  return `${capitalize(name)} (${value} ${unit})`;
-}
-
-
-// 🔥 SPECIALIZED FOR øre/kWh (fixes both bugs)
-function formatOrePerKwh(value) {
-  if (value == null) return null;
-
-  let corrected = value;
-
-  // Case 1: clearly kroner misinterpreted
-  if (value > 0 && value < 1) {
-    corrected = value * 100;
-  }
-
-  // Case 2: clearly wrong (total kr mistakenly mapped)
-  if (value > 20) {
-    return null; // discard invalid surcharge/price
-  }
-
-  return `${round(corrected)} øre/kWh`;
-}
-
-function formatUnit(value, unit) {
+function formatValue(value, unit) {
   if (value == null) return null;
   return `${round(value)} ${unit}`;
-}
-
-function round(num) {
-  return Math.round(num * 100) / 100;
 }
 
 function formatCurrency(value) {
   if (value == null) return null;
   return `${value.toLocaleString("en-US")} kr`;
+}
+
+function formatServices(services) {
+  if (!services?.length) return null;
+  return services.join(", ");
+}
+
+function normalizeDate(date) {
+  return date || null;
+}
+
+function formatPeriod(period) {
+  if (!period) return null;
+  return period.replace("-", " - ");
 }
 
 function formatAddress(addr) {
@@ -261,30 +204,15 @@ function formatAddress(addr) {
   return addr
     .toLowerCase()
     .split(" ")
-    .map((word) => {
-      if (/^\d+[a-z]$/.test(word)) {
-        return word.toUpperCase();
-      }
-      return word.charAt(0).toUpperCase() + word.slice(1);
+    .map((w) => {
+      if (/^\d+[a-z]$/.test(w)) return w.toUpperCase();
+      return w.charAt(0).toUpperCase() + w.slice(1);
     })
     .join(" ");
 }
 
-function formatPeriod(period) {
-  if (!period) return null;
-
-  return period
-    .replace(
-      /(\d{2})\.(\d{2})\.(\d{2})/g,
-      (_, d, m, y) => `${d}.${m}.20${y}`
-    )
-    .replace("-", " - ");
-}
-
-function capitalize(text) {
-  return text
-    .toLowerCase()
-    .replace(/\b\w/g, (c) => c.toUpperCase());
+function round(num) {
+  return Math.round(num * 100) / 100;
 }
 
 
