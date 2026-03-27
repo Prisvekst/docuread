@@ -15,6 +15,36 @@ const client = new OpenAI({
 
 const upload = multer({ dest: "uploads/" });
 
+/** Stable JSON key order (some clients reorder plain objects). */
+const OUTPUT_KEY_ORDER = [
+  "name",
+  "address",
+  "period",
+  "invoice_date",
+  "supplier",
+  "price_area",
+  "meter_number",
+  "meter_id",
+  "agreement_name",
+  "surcharge",
+  "fixed_cost",
+  "electricity_price",
+  "total_costs",
+  "additional_services",
+  "annual_consumption",
+  "period_consumption",
+];
+
+function orderKeys(obj, keys) {
+  const out = {};
+  for (const k of keys) {
+    if (Object.prototype.hasOwnProperty.call(obj, k)) {
+      out[k] = obj[k];
+    }
+  }
+  return out;
+}
+
 app.use(express.json());
 
 app.post("/parse-invoice", upload.single("file"), async (req, res) => {
@@ -181,7 +211,7 @@ Return ONLY JSON matching schema.
 
     const formatted = formatOutput(parsed);
 
-    return res.json(formatted);
+    return res.json(orderKeys(formatted, OUTPUT_KEY_ORDER));
   } catch (err) {
     return res.status(500).json({ error: err.message });
   } finally {
