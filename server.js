@@ -117,23 +117,23 @@ Return ONLY JSON matching schema.
         properties: {
           name: { type: ["string", "null"] },
           address: { type: ["string", "null"] },
-          supplier: { type: ["string", "null"] },
+          period: { type: ["string", "null"] },
           invoice_date: { type: ["string", "null"] },
-          annual_consumption: { type: ["number", "null"] },
-          meter_number: { type: ["string", "null"] },
-          meter_id: { type: ["string", "null"] }, // ✅ NEW FIELD
-          agreement_name: { type: ["string", "null"] },
+          supplier: { type: ["string", "null"] },
           price_area: { type: ["string", "null"] },
+          meter_number: { type: ["string", "null"] },
+          meter_id: { type: ["string", "null"] },
+          agreement_name: { type: ["string", "null"] },
           surcharge: { type: ["number", "null"] },
           fixed_cost: { type: ["number", "null"] },
-          period: { type: ["string", "null"] },
-          period_consumption: { type: ["number", "null"] },
           electricity_price: { type: ["number", "null"] },
+          total_costs: { type: ["number", "null"] },
           additional_services: {
             type: ["array", "null"],
             items: { type: "string" },
           },
-          total_costs: { type: ["number", "null"] },
+          annual_consumption: { type: ["number", "null"] },
+          period_consumption: { type: ["number", "null"] },
           missing_fields: {
             type: "array",
             items: { type: "string" },
@@ -142,20 +142,20 @@ Return ONLY JSON matching schema.
         required: [
           "name",
           "address",
-          "supplier",
+          "period",
           "invoice_date",
-          "annual_consumption",
+          "supplier",
+          "price_area",
           "meter_number",
           "meter_id",
           "agreement_name",
-          "price_area",
           "surcharge",
           "fixed_cost",
-          "period",
-          "period_consumption",
           "electricity_price",
-          "additional_services",
           "total_costs",
+          "additional_services",
+          "annual_consumption",
+          "period_consumption",
           "missing_fields",
         ],
       },
@@ -198,28 +198,20 @@ function formatOutput(data) {
   return {
     name: data.name,
     address: formatAddress(data.address),
-    supplier: data.supplier,
+    period: formatPeriod(data.period),
     invoice_date: data.invoice_date,
-
-    annual_consumption: formatValue(data.annual_consumption, "kWh"),
-
-    meter_number: data.meter_number,
-    meter_id: data.meter_id, // ✅ included
-    agreement_name: data.agreement_name,
+    supplier: data.supplier,
     price_area: data.price_area,
-
+    meter_number: data.meter_number,
+    meter_id: data.meter_id,
+    agreement_name: data.agreement_name,
     surcharge: formatValue(data.surcharge, "øre/kWh"),
     fixed_cost: formatValue(data.fixed_cost, "kr/mnd"),
-
-    period: formatPeriod(data.period),
-
-    "period consumption": formatValue(data.period_consumption, "kWh"),
-
     electricity_price: formatValue(data.electricity_price, "øre/kWh"),
-
-    additional_services: formatServices(data.additional_services),
-
     total_costs: formatCurrency(data.total_costs),
+    additional_services: formatServices(data.additional_services),
+    annual_consumption: formatValue(data.annual_consumption, "kWh"),
+    period_consumption: formatValue(data.period_consumption, "kWh"),
   };
 }
 
