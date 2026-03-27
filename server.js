@@ -28,13 +28,11 @@ app.post("/parse-invoice", upload.single("file"), async (req, res) => {
       purpose: "user_data",
     });
 
-    // 🧠 AI-FIRST PROMPT
+    // 🔥 AI-FIRST PROMPT (UPDATED)
     const systemPrompt = `
 You are an expert at reading Norwegian electricity invoices.
 
 Return ONLY valid JSON.
-
-Your task is to extract structured data and normalize it consistently.
 
 ------------------------
 GENERAL RULES
@@ -42,68 +40,57 @@ GENERAL RULES
 
 - Do NOT guess values
 - If a value is missing → return null
-- Always choose the most correct and relevant value when multiple candidates exist
+- Choose the most correct value when multiple exist
 
 ------------------------
-FORMATTING RULES (IMPORTANT)
+FORMATTING RULES
 ------------------------
 
 Dates:
-- Always use format: DD.MM.YYYY
-- Example: "2. mai 2025" → "02.05.2025"
+- Format: DD.MM.YYYY
 
 Periods:
-- Always return full date range in format:
-  "DD.MM.YYYY - DD.MM.YYYY"
-- Convert text periods:
+- Format: "DD.MM.YYYY - DD.MM.YYYY"
+- Convert:
   "hele april 2025" → "01.04.2025 - 30.04.2025"
 
 Numbers:
-- Use dot as decimal separator (not comma)
-- Example: "8,32" → "8.32"
+- Use dot as decimal separator
 
 ------------------------
 FIELD DEFINITIONS
 ------------------------
 
 electricity_price:
-- Price per kWh
-- MUST be in øre/kWh
+- Price per kWh (øre/kWh)
 - Only use values labeled "øre/kWh"
-- NEVER use values in kr
 
 surcharge:
-- Additional cost per kWh
-- MUST be in øre/kWh
+- Additional cost per kWh (øre/kWh)
 - Only use values labeled "øre/kWh"
-- NEVER use total kr values
 
 fixed_cost:
-- Monthly fixed fee
-- MUST be in kr/mnd
+- Monthly fee (kr/mnd)
 
 total_costs:
-- MUST represent electricity cost ONLY (strøm)
-- Prefer values labeled:
-  "Sum strøm"
-- NEVER use:
-  "Totalt å betale"
-  "Nettleie"
+- Electricity cost ONLY (strøm)
+- Prefer "Sum strøm"
+- Ignore "Totalt å betale" and "Nettleie"
+
+meter_id:
+- Metering point ID (målepunkt-ID)
+- Numeric string
+- Typically starts with 7070575000
+- Usually 18 digits
+- Extract full number exactly
+- Do NOT confuse with meter_number
 
 ------------------------
 ADDITIONAL SERVICES
 ------------------------
 
-- Include ONLY extra services NOT already represented in other fields
-
-- DO NOT include:
-  - fixed_cost (e.g. abonnement, fastbeløp)
-  - surcharge (påslag)
-
-- Each service must include:
-  - name
-  - value
-  - unit
+- Include ONLY services not already in other fields
+- Exclude abonnement, fastbeløp, påslag
 
 - Format:
   "Service Name (value unit)"
@@ -111,22 +98,13 @@ ADDITIONAL SERVICES
 - Example:
   "Papirfaktura (8.32 kr)"
 
-- If no valid additional services exist → return null
-
-------------------------
-CONSISTENCY RULES
-------------------------
-
-- Use consistent formatting across all fields
-- Do not mix formats (no commas, no colons, no inconsistent spacing)
-- Ensure clean, readable output
+- If none → null
 
 ------------------------
 FINAL OUTPUT
 ------------------------
 
-Return ONLY the JSON object following the schema.
-No explanations.
+Return ONLY JSON matching schema.
 `;
 
     const schema = {
@@ -143,6 +121,7 @@ No explanations.
           invoice_date: { type: ["string", "null"] },
           annual_consumption: { type: ["number", "null"] },
           meter_number: { type: ["string", "null"] },
+          meter_id: { type: ["string", "null"] }, // ✅ NEW FIELD
           agreement_name: { type: ["string", "null"] },
           price_area: { type: ["string", "null"] },
           surcharge: { type: ["number", "null"] },
@@ -151,7 +130,7 @@ No explanations.
           period_consumption: { type: ["number", "null"] },
           electricity_price: { type: ["number", "null"] },
           additional_services: {
-            type: "array",
+            type: ["array", "null"],
             items: { type: "string" },
           },
           total_costs: { type: ["number", "null"] },
@@ -167,6 +146,7 @@ No explanations.
           "invoice_date",
           "annual_consumption",
           "meter_number",
+          "meter_id",
           "agreement_name",
           "price_area",
           "surcharge",
@@ -219,11 +199,12 @@ function formatOutput(data) {
     name: data.name,
     address: formatAddress(data.address),
     supplier: data.supplier,
-    invoice_date: normalizeDate(data.invoice_date),
+    invoice_date: data.invoice_date,
 
     annual_consumption: formatValue(data.annual_consumption, "kWh"),
 
     meter_number: data.meter_number,
+    meter_id: data.meter_id, // ✅ included
     agreement_name: data.agreement_name,
     price_area: data.price_area,
 
@@ -244,7 +225,7 @@ function formatOutput(data) {
 
 
 // =========================
-// 🧠 HELPERS (SAFE ONLY)
+// 🧠 HELPERS
 // =========================
 
 function formatValue(value, unit) {
@@ -258,17 +239,13 @@ function formatCurrency(value) {
 }
 
 function formatServices(services) {
-  if (!services?.length) return null;
+  if (!services || !services.length) return null;
   return services.join(", ");
-}
-
-function normalizeDate(date) {
-  return date || null;
 }
 
 function formatPeriod(period) {
   if (!period) return null;
-  return period.replace("-", " - ");
+  return period.replace(/\s*-\s*/, " - ");
 }
 
 function formatAddress(addr) {
