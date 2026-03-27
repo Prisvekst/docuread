@@ -158,7 +158,7 @@ function cleanData(data) {
 
 
 // =========================
-// ✅ NO DOUBLE COUNTING (BY MEANING)
+// ✅ PREVENT DOUBLE COUNTING
 // =========================
 
 function cleanServices(services, data) {
@@ -170,9 +170,8 @@ function cleanServices(services, data) {
 
       const lower = s.toLowerCase();
 
-      // ❌ Remove only if same meaning as structured field
+      // Remove only same meaning (not value-based)
 
-      // Fixed cost duplication
       if (
         data.fixed_cost !== null &&
         (lower.includes("fastbeløp") ||
@@ -182,7 +181,6 @@ function cleanServices(services, data) {
         return null;
       }
 
-      // Surcharge duplication
       if (
         data.surcharge !== null &&
         lower.includes("påslag")
@@ -216,9 +214,23 @@ function normalizeService(s) {
   return `${capitalize(name)} (${value} ${unit})`;
 }
 
+
+// 🔥 FIXED UNIT FORMAT (with scaling correction)
 function formatUnit(value, unit) {
   if (value == null) return null;
-  return `${value} ${unit}`;
+
+  let corrected = value;
+
+  // Fix: kr interpreted as øre
+  if (unit === "øre/kWh" && value > 0 && value < 10) {
+    corrected = value * 100;
+  }
+
+  return `${round(corrected)} ${unit}`;
+}
+
+function round(num) {
+  return Math.round(num * 100) / 100;
 }
 
 function formatCurrency(value) {
@@ -233,12 +245,9 @@ function formatAddress(addr) {
     .toLowerCase()
     .split(" ")
     .map((word) => {
-      // Preserve numbers with letters like "115a"
       if (/^\d+[a-z]$/.test(word)) {
-        return word.toUpperCase(); // 115A (common standard)
+        return word.toUpperCase();
       }
-
-      // Normal words → capitalize first letter only
       return word.charAt(0).toUpperCase() + word.slice(1);
     })
     .join(" ");
