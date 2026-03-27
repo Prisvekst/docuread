@@ -21,10 +21,10 @@ app.post("/parse-invoice", upload.single("file"), async (req, res) => {
   let path = req.file.path;
 
   try {
-    const fileBuffer = fs.readFileSync(path);
+    const buffer = fs.readFileSync(path);
 
     const file = await client.files.create({
-      file: await toFile(fileBuffer, req.file.originalname),
+      file: await toFile(buffer, req.file.originalname),
       purpose: "user_data",
     });
 
@@ -39,7 +39,7 @@ Rules:
 - Do not guess
 
 IMPORTANT:
-- additional_services must include name + price + unit if present
+- additional_services must include name + value + unit if present
 - Format: "<name> <value> <unit>"
 `;
 
@@ -125,7 +125,7 @@ IMPORTANT:
 
 
 // =========================
-// 🔥 CLEANING + FORMATTING
+// 🔥 CLEAN + FORMAT
 // =========================
 
 function cleanData(data) {
@@ -150,7 +150,7 @@ function cleanData(data) {
 
     electricity_price: formatUnit(data.electricity_price, "øre/kWh"),
 
-    additional_services: cleanServices(data.additional_services),
+    additional_services: cleanServices(data.additional_services, data),
 
     total_costs: formatCurrency(data.total_costs),
   };
@@ -158,25 +158,48 @@ function cleanData(data) {
 
 
 // =========================
-// 🧠 SMART CLEANERS
+// ✅ NO DOUBLE COUNTING (BY MEANING)
 // =========================
 
-function cleanServices(services) {
+function cleanServices(services, data) {
   if (!services?.length) return null;
 
   return services
-    .filter((s) => {
+    .map((s) => {
+      if (!s) return null;
+
       const lower = s.toLowerCase();
 
-      // ❌ Remove duplicates of known fields
-      if (lower.includes("påslag")) return false;
-      if (lower.includes("fastbeløp")) return false;
+      // ❌ Remove only if same meaning as structured field
 
-      return true;
+      // Fixed cost duplication
+      if (
+        data.fixed_cost !== null &&
+        (lower.includes("fastbeløp") ||
+          lower.includes("abonnement") ||
+          lower.includes("mnd"))
+      ) {
+        return null;
+      }
+
+      // Surcharge duplication
+      if (
+        data.surcharge !== null &&
+        lower.includes("påslag")
+      ) {
+        return null;
+      }
+
+      return normalizeService(s);
     })
-    .map((s) => normalizeService(s))
+    .filter(Boolean)
     .join(", ");
 }
+
+
+// =========================
+// 🧠 HELPERS
+// =========================
 
 function normalizeService(s) {
   if (!s) return null;
@@ -193,11 +216,6 @@ function normalizeService(s) {
   return `${capitalize(name)} (${value} ${unit})`;
 }
 
-
-// =========================
-// 🧰 HELPERS
-// =========================
-
 function formatUnit(value, unit) {
   if (value == null) return null;
   return `${value} ${unit}`;
@@ -213,8 +231,7 @@ function formatAddress(addr) {
 
   return addr
     .toLowerCase()
-    .replace(/\b\w/g, (c) => c.toUpperCase())
-    .replace("Strømmen", "Strømmen"); // force correct casing
+    .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function formatPeriod(period) {
