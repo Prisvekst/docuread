@@ -127,6 +127,7 @@ totale_kostnader:
 - en strømregning består i noen tilfeller av strømregning og nettleie regning, du skal ignorere nettleie og finne ut av summen av strømregningen.
 - strømregningen er som regel det største beløpet på regningen utenom nettleien som vi ignorerer.
 - Finn summen av alle postene i strømregningen.
+- Feltet er ofte kalt for sum strøm, vi skal aldri hente summen av nettleie og strøm. Kun strøm. 
 
 målepunkt_id:
 - Målepunkt-ID
