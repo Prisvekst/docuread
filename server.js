@@ -9,189 +9,189 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3000;
 
-const client = new OpenAI({
+const klient = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-const upload = multer({ dest: "uploads/" });
+const upload = multer({
+  dest: "uploads/",
+});
 
-/** Stable JSON key order (some clients reorder plain objects). */
+/** Stabil JSON-nøkkelrekkefølge */
 const OUTPUT_KEY_ORDER = [
-  "name",
-  "address",
-  "period",
-  "invoice_date",
-  "supplier",
-  "price_area",
-  "meter_number",
-  "meter_id",
-  "agreement_name",
-  "surcharge",
-  "fixed_cost",
-  "electricity_price",
-  "total_costs",
-  "additional_services",
-  "annual_consumption",
-  "period_consumption",
+  "navn",
+  "adresse",
+  "periode",
+  "fakturadato",
+  "leverandør",
+  "prisområde",
+  "målernummer",
+  "målepunkt_id",
+  "avtalenavn",
+  "påslag",
+  "fastbeløp",
+  "strømpris",
+  "totale_kostnader",
+  "tilleggstjenester",
+  "årsforbruk",
+  "periodeforbruk",
 ];
 
-function orderKeys(obj, keys) {
-  const out = {};
-  for (const k of keys) {
-    if (Object.prototype.hasOwnProperty.call(obj, k)) {
-      out[k] = obj[k];
+function sorterNøkler(obj, nøkler) {
+  const resultat = {};
+
+  for (const nøkkel of nøkler) {
+    if (Object.prototype.hasOwnProperty.call(obj, nøkkel)) {
+      resultat[nøkkel] = obj[nøkkel];
     }
   }
-  return out;
+
+  return resultat;
 }
 
 app.use(express.json());
 
 app.post("/parse-invoice", upload.single("file"), async (req, res) => {
-  let path = req.file.path;
+  let filsti = req.file.path;
 
   try {
-    const buffer = fs.readFileSync(path);
+    const buffer = fs.readFileSync(filsti);
 
-    const file = await client.files.create({
+    const fil = await klient.files.create({
       file: await toFile(buffer, req.file.originalname),
       purpose: "user_data",
     });
 
-    // 🔥 AI-FIRST PROMPT (UPDATED)
     const systemPrompt = `
-You are an expert at reading Norwegian electricity invoices.
+Du er en ekspert på å lese norske strømfakturaer.
 
-Return ONLY valid JSON.
-
-------------------------
-GENERAL RULES
-------------------------
-
-- Do NOT guess values
-- If a value is missing → return null
-- Choose the most correct value when multiple exist
+Returner KUN gyldig JSON.
 
 ------------------------
-FORMATTING RULES
+GENERELLE REGLER
 ------------------------
+- Ikke gjett verdier
+- Hvis en verdi mangler → returner null
+- Velg den mest korrekte verdien når flere finnes
 
-Dates:
+------------------------
+FORMATERINGSREGLER
+------------------------
+Datoer:
 - Format: DD.MM.YYYY
 
-Periods:
+Perioder:
 - Format: "DD.MM.YYYY - DD.MM.YYYY"
-- Convert:
+- Konverter:
   "hele april 2025" → "01.04.2025 - 30.04.2025"
 
-Numbers:
-- Use dot as decimal separator
+Tall:
+- Bruk punktum som desimalskilletegn
 
 ------------------------
-FIELD DEFINITIONS
+FELTDEFINISJONER
 ------------------------
+strømpris:
+- Pris per kWh (øre/kWh)
+- Bruk kun verdier merket "øre/kWh"
+- Feltet er ofte kalt strømpris, spotpris, fastpris, strøm og lignende.
 
-electricity_price:
-- Price per kWh (øre/kWh)
-- Only use values labeled "øre/kWh"
+påslag:
+- Tilleggskostnad per kWh (øre/kWh)
+- Bruk kun verdier merket "øre/kWh"
 
-surcharge:
-- Additional cost per kWh (øre/kWh)
-- Only use values labeled "øre/kWh"
+fastbeløp:
+- Månedlig fastbeløp (kr/mnd)
+- Feltet er ofte kalt fastbeløp, abonnement lignende.
 
-fixed_cost:
-- Monthly fee (kr/mnd)
+totale_kostnader:
+- en strømregning består i noen tilfeller av strømregning og nettleie regning, du skal ignorere nettleie og finne ut av summen av strømregningen.
+- strømregningen er som regel det største beløpet på regningen utenom nettleien som vi ignorerer.
+- Finn summen av alle postene i strømregningen.
 
-total_costs:
-- Electricity cost ONLY (strøm)
-- Prefer "Sum" or "Total" or typically one of the biggest cost related numbers
-- Ignore anything to to with nettleie, or total cost including nettleie
-
-meter_id:
-- Metering point ID (målepunkt-ID)
-- Numeric string
-- Always starts with 7070575000, if it does not start with this its probably meter_number instead.
-- Usually 18 digits
-- Extract full number exactly
-- Do NOT confuse with meter_number
+målepunkt_id:
+- Målepunkt-ID
+- Numerisk streng
+- Starter alltid med 7070575000
+- Vanligvis 18 sifre
+- Ikke forveksle med målernummer
 
 ------------------------
-ADDITIONAL SERVICES
+TILLEGGSTJENESTER
 ------------------------
-
-- Include ONLY services not already in other fields
-- Exclude abonnement, fastbeløp, påslag
+- Inkluder KUN tjenester som ikke allerede finnes i andre felt
+- Ekskluder abonnement, fastbeløp og påslag
 
 - Format:
-  "Service Name (value unit)"
+  "Tjenestenavn (verdi enhet)"
 
-- Example:
+- Eksempel:
   "Papirfaktura (8.32 kr)"
+  "Garantistrøm (9.9 øre/kWh)"
 
-- If none → null
+- Hvis ingen → null
 
 ------------------------
-FINAL OUTPUT
+SLUTTRESULTAT
 ------------------------
-
-Return ONLY JSON matching schema.
+Returner KUN JSON som matcher skjemaet.
 `;
 
     const schema = {
       type: "json_schema",
-      name: "invoice",
+      name: "faktura",
       strict: true,
       schema: {
         type: "object",
         additionalProperties: false,
         properties: {
-          name: { type: ["string", "null"] },
-          address: { type: ["string", "null"] },
-          period: { type: ["string", "null"] },
-          invoice_date: { type: ["string", "null"] },
-          supplier: { type: ["string", "null"] },
-          price_area: { type: ["string", "null"] },
-          meter_number: { type: ["string", "null"] },
-          meter_id: { type: ["string", "null"] },
-          agreement_name: { type: ["string", "null"] },
-          surcharge: { type: ["number", "null"] },
-          fixed_cost: { type: ["number", "null"] },
-          electricity_price: { type: ["number", "null"] },
-          total_costs: { type: ["number", "null"] },
-          additional_services: {
+          navn: { type: ["string", "null"] },
+          adresse: { type: ["string", "null"] },
+          periode: { type: ["string", "null"] },
+          fakturadato: { type: ["string", "null"] },
+          leverandør: { type: ["string", "null"] },
+          prisområde: { type: ["string", "null"] },
+          målernummer: { type: ["string", "null"] },
+          målepunkt_id: { type: ["string", "null"] },
+          avtalenavn: { type: ["string", "null"] },
+          påslag: { type: ["number", "null"] },
+          fastbeløp: { type: ["number", "null"] },
+          strømpris: { type: ["number", "null"] },
+          totale_kostnader: { type: ["number", "null"] },
+          tilleggstjenester: {
             type: ["array", "null"],
             items: { type: "string" },
           },
-          annual_consumption: { type: ["number", "null"] },
-          period_consumption: { type: ["number", "null"] },
-          missing_fields: {
+          årsforbruk: { type: ["number", "null"] },
+          periodeforbruk: { type: ["number", "null"] },
+          manglende_felt: {
             type: "array",
             items: { type: "string" },
           },
         },
         required: [
-          "name",
-          "address",
-          "period",
-          "invoice_date",
-          "supplier",
-          "price_area",
-          "meter_number",
-          "meter_id",
-          "agreement_name",
-          "surcharge",
-          "fixed_cost",
-          "electricity_price",
-          "total_costs",
-          "additional_services",
-          "annual_consumption",
-          "period_consumption",
-          "missing_fields",
+          "navn",
+          "adresse",
+          "periode",
+          "fakturadato",
+          "leverandør",
+          "prisområde",
+          "målernummer",
+          "målepunkt_id",
+          "avtalenavn",
+          "påslag",
+          "fastbeløp",
+          "strømpris",
+          "totale_kostnader",
+          "tilleggstjenester",
+          "årsforbruk",
+          "periodeforbruk",
+          "manglende_felt",
         ],
       },
     };
 
-    const response = await client.responses.create({
+    const response = await klient.responses.create({
       model: "gpt-4o",
       temperature: 0,
       input: [
@@ -201,95 +201,104 @@ Return ONLY JSON matching schema.
         },
         {
           role: "user",
-          content: [{ type: "input_file", file_id: file.id }],
+          content: [{ type: "input_file", file_id: fil.id }],
         },
       ],
-      text: { format: schema },
+      text: {
+        format: schema,
+      },
     });
 
     const parsed = JSON.parse(response.output_text);
+    const formatert = formaterOutput(parsed);
 
-    const formatted = formatOutput(parsed);
-
-    return res.json(orderKeys(formatted, OUTPUT_KEY_ORDER));
+    return res.json(sorterNøkler(formatert, OUTPUT_KEY_ORDER));
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({
+      error: err.message,
+    });
   } finally {
-    if (fs.existsSync(path)) fs.unlinkSync(path);
+    if (fs.existsSync(filsti)) {
+      fs.unlinkSync(filsti);
+    }
   }
 });
 
-
-// =========================
-// 🎯 LIGHT FORMATTING ONLY
-// =========================
-
-function formatOutput(data) {
+function formaterOutput(data) {
   return {
-    name: data.name,
-    address: formatAddress(data.address),
-    period: formatPeriod(data.period),
-    invoice_date: data.invoice_date,
-    supplier: data.supplier,
-    price_area: data.price_area,
-    meter_number: data.meter_number,
-    meter_id: data.meter_id,
-    agreement_name: data.agreement_name,
-    surcharge: formatValue(data.surcharge, "øre/kWh"),
-    fixed_cost: formatValue(data.fixed_cost, "kr/mnd"),
-    electricity_price: formatValue(data.electricity_price, "øre/kWh"),
-    total_costs: formatCurrency(data.total_costs),
-    additional_services: formatServices(data.additional_services),
-    annual_consumption: formatValue(data.annual_consumption, "kWh"),
-    period_consumption: formatValue(data.period_consumption, "kWh"),
+    navn: data.navn,
+    adresse: formaterAdresse(data.adresse),
+    periode: formaterPeriode(data.periode),
+    fakturadato: data.fakturadato,
+    leverandør: data.leverandør,
+    prisområde: data.prisområde,
+    målernummer: data.målernummer,
+    målepunkt_id: data.målepunkt_id,
+    avtalenavn: data.avtalenavn,
+    påslag: formaterVerdi(data.påslag, "øre/kWh"),
+    fastbeløp: formaterVerdi(data.fastbeløp, "kr/mnd"),
+    strømpris: formaterVerdi(data.strømpris, "øre/kWh"),
+    totale_kostnader: formaterValuta(data.totale_kostnader),
+    tilleggstjenester: formaterTjenester(data.tilleggstjenester),
+    årsforbruk: formaterVerdi(data.årsforbruk, "kWh"),
+    periodeforbruk: formaterVerdi(data.periodeforbruk, "kWh"),
   };
 }
 
+function formaterVerdi(verdi, enhet) {
+  if (verdi == null) {
+    return null;
+  }
 
-// =========================
-// 🧠 HELPERS
-// =========================
-
-function formatValue(value, unit) {
-  if (value == null) return null;
-  return `${round(value)} ${unit}`;
+  return `${avrund(verdi)} ${enhet}`;
 }
 
-function formatCurrency(value) {
-  if (value == null) return null;
-  return `${value.toLocaleString("en-US")} kr`;
+function formaterValuta(verdi) {
+  if (verdi == null) {
+    return null;
+  }
+
+  return `${verdi.toLocaleString("nb-NO")} kr`;
 }
 
-function formatServices(services) {
-  if (!services || !services.length) return null;
-  return services.join(", ");
+function formaterTjenester(tjenester) {
+  if (!tjenester || !tjenester.length) {
+    return null;
+  }
+
+  return tjenester.join(", ");
 }
 
-function formatPeriod(period) {
-  if (!period) return null;
-  return period.replace(/\s*-\s*/, " - ");
+function formaterPeriode(periode) {
+  if (!periode) {
+    return null;
+  }
+
+  return periode.replace(/\s*-\s*/, " - ");
 }
 
-function formatAddress(addr) {
-  if (!addr) return null;
+function formaterAdresse(adresse) {
+  if (!adresse) {
+    return null;
+  }
 
-  return addr
+  return adresse
     .toLowerCase()
     .split(" ")
-    .map((w) => {
-      if (/^\d+[a-z]$/.test(w)) return w.toUpperCase();
-      return w.charAt(0).toUpperCase() + w.slice(1);
+    .map((ord) => {
+      if (/^\d+[a-z]$/i.test(ord)) {
+        return ord.toUpperCase();
+      }
+
+      return ord.charAt(0).toUpperCase() + ord.slice(1);
     })
     .join(" ");
 }
 
-function round(num) {
-  return Math.round(num * 100) / 100;
+function avrund(tall) {
+  return Math.round(tall * 100) / 100;
 }
 
-
-// =========================
-
 app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
+  console.log(`Server kjører på port ${port}`);
 });
