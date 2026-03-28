@@ -135,6 +135,14 @@ målepunkt_id:
 - Vanligvis 18 sifre
 - Ikke forveksle med målernummer
 
+målernummer:
+- målernummer
+- Numerisk streng
+- Vanligvis 16 sifre, men kan være kortere
+- Ikke forveksle med målepunkt_id
+- Starter aldri med 7070575000
+- Feltet er ofte kalt målernummer, målernr, måler nr, måler og lignende.
+
 ------------------------
 TILLEGGSTJENESTER
 ------------------------
