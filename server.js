@@ -49,6 +49,27 @@ function sorterNøkler(obj, nøkler) {
   return resultat;
 }
 
+/** Token counts from OpenAI Responses API (`usage` shape can vary slightly by SDK version). */
+function hentTokenforbruk(response) {
+  const u = response?.usage;
+  if (!u || typeof u !== "object") {
+    return null;
+  }
+
+  const inputTokens = u.input_tokens ?? u.prompt_tokens;
+  const outputTokens = u.output_tokens ?? u.completion_tokens;
+  let totalTokens = u.total_tokens;
+  if (totalTokens == null && typeof inputTokens === "number" && typeof outputTokens === "number") {
+    totalTokens = inputTokens + outputTokens;
+  }
+
+  return {
+    input_tokens: inputTokens ?? null,
+    output_tokens: outputTokens ?? null,
+    total_tokens: totalTokens ?? null,
+  };
+}
+
 app.use(express.json());
 
 app.post("/parse-invoice", upload.single("file"), async (req, res) => {
@@ -211,8 +232,12 @@ Returner KUN JSON som matcher skjemaet.
 
     const parsed = JSON.parse(response.output_text);
     const formatert = formaterOutput(parsed);
+    const faktura = sorterNøkler(formatert, OUTPUT_KEY_ORDER);
 
-    return res.json(sorterNøkler(formatert, OUTPUT_KEY_ORDER));
+    return res.json({
+      ...faktura,
+      token_usage: hentTokenforbruk(response),
+    });
   } catch (err) {
     return res.status(500).json({
       error: err.message,
