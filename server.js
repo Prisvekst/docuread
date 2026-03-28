@@ -49,25 +49,23 @@ function sorterNøkler(obj, nøkler) {
   return resultat;
 }
 
-/** Token counts from OpenAI Responses API (`usage` shape can vary slightly by SDK version). */
-function hentTokenforbruk(response) {
+/** Total tokens from OpenAI Responses `usage` (snake_case or camelCase). */
+function hentTotaltAntallTokens(response) {
   const u = response?.usage;
   if (!u || typeof u !== "object") {
     return null;
   }
 
-  const inputTokens = u.input_tokens ?? u.prompt_tokens;
-  const outputTokens = u.output_tokens ?? u.completion_tokens;
-  let totalTokens = u.total_tokens;
+  const inputTokens =
+    u.input_tokens ?? u.inputTokens ?? u.prompt_tokens ?? u.promptTokens;
+  const outputTokens =
+    u.output_tokens ?? u.outputTokens ?? u.completion_tokens ?? u.completionTokens;
+  let totalTokens = u.total_tokens ?? u.totalTokens;
   if (totalTokens == null && typeof inputTokens === "number" && typeof outputTokens === "number") {
     totalTokens = inputTokens + outputTokens;
   }
 
-  return {
-    input_tokens: inputTokens ?? null,
-    output_tokens: outputTokens ?? null,
-    total_tokens: totalTokens ?? null,
-  };
+  return typeof totalTokens === "number" && !Number.isNaN(totalTokens) ? totalTokens : null;
 }
 
 app.use(express.json());
@@ -236,7 +234,7 @@ Returner KUN JSON som matcher skjemaet.
 
     return res.json({
       ...faktura,
-      token_usage: hentTokenforbruk(response),
+      tokens: hentTotaltAntallTokens(response),
     });
   } catch (err) {
     return res.status(500).json({
